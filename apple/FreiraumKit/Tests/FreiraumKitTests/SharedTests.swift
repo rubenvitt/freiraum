@@ -135,6 +135,11 @@ private let pots: [String: [Pot]] = [
         #expect(state.manual.last?.title == "Rückzahlung mit Einzahlung verrechnet")
         #expect(state.manual.last?.subtitle == "Do, 12. Nov · Du")
         #expect(state.manual.last?.amount == "10,00\u{00A0}€")
+        // Nur eigene Einträge lassen sich zurücknehmen.
+        #expect(state.manual.first?.deletable == false)
+        #expect(state.manual.first?.isOffset == false)
+        #expect(state.manual.last?.deletable == true)
+        #expect(state.manual.last?.isOffset == true)
     }
 
     @Test func ausgeglichen() {
@@ -161,6 +166,69 @@ private let pots: [String: [Pot]] = [
             me: a
         )
         #expect(state.summary == "Person B schuldet dem Gemeinsamen 10,00\u{00A0}€")
+    }
+}
+
+@Suite struct SettlementDraftTests {
+    func settlements(open: Int, for personId: String = "pa") -> Settlements {
+        Settlements(householdId: "h2", balances: [
+            .init(personId: personId, displayName: "Person A", openCents: open),
+            .init(personId: "pb", displayName: "Person B", openCents: -open),
+        ])
+    }
+
+    @Test func nurBeiOffenemEigenemSaldo() {
+        #expect(SettlementDraft(settlements(open: 0), me: a) == nil)
+        #expect(SettlementDraft(settlements(open: 1_000, for: "px"), me: a) == nil)
+        #expect(SettlementDraft(settlements(open: 1_000), me: nil) == nil)
+    }
+
+    @Test func forderungBarOderVerrechnet() throws {
+        var draft = try #require(SettlementDraft(settlements(open: 4_050), me: a, today: "2026-11-17"))
+        #expect(draft.isClaim)
+        #expect(draft.kind == .zahlung)
+        #expect(draft.kinds == [.zahlung, .verrechnung])
+        #expect(draft.title == "Erstattung verbuchen")
+        #expect(draft.amountText == "40,50")
+        #expect(draft.problem == nil)
+        #expect(draft.input == SettlementInput(amountCents: 4_050, kind: .zahlung, settledOn: "2026-11-17"))
+
+        draft.amountText = "20"
+        draft.kind = .verrechnung
+        draft.note = "  Grillabend  "
+        #expect(draft.hint.contains("500 € Ist"))
+        #expect(draft.input == SettlementInput(amountCents: 2_000, kind: .verrechnung, settledOn: "2026-11-17", note: "Grillabend"))
+    }
+
+    @Test func schuldNurVerrechnen() throws {
+        var draft = try #require(SettlementDraft(settlements(open: -2_500), me: a, today: "2026-11-17"))
+        #expect(!draft.isClaim)
+        #expect(draft.kind == .verrechnung)
+        #expect(draft.kinds == [.verrechnung])
+        #expect(draft.title == "Rückzahlung verrechnen")
+        #expect(draft.amountText == "25")
+        #expect(draft.hint.contains("450 € Ist"))
+        #expect(draft.input?.amountCents == 2_500)
+
+        draft.kind = .zahlung
+        #expect(draft.problem == "Eine Rückzahlung lässt sich nur mit der Einzahlung verrechnen.")
+        #expect(draft.input == nil)
+    }
+
+    @Test func hoechstensDerSaldo() throws {
+        var draft = try #require(SettlementDraft(settlements(open: 4_000), me: a))
+        draft.amountText = "40,01"
+        #expect(draft.problem == "Offen sind nur 40,00\u{00A0}€.")
+        #expect(draft.input == nil)
+        draft.amountText = ""
+        #expect(draft.problem == "Wie viel hast du erhalten?")
+        draft.amountText = "0"
+        #expect(draft.problem?.hasPrefix("Den Betrag verstehe ich nicht") == true)
+        draft.amountText = "abc"
+        #expect(draft.input == nil)
+        draft.amountText = "40"
+        draft.note = String(repeating: "x", count: 301)
+        #expect(draft.problem?.contains("300") == true)
     }
 }
 
@@ -236,6 +304,81 @@ private let pots: [String: [Pot]] = [
         #expect(s.openDebts.first?.counterpartyName == "Laden")
         #expect(s.manual.first?.note == nil)
         #expect(s.manual.first?.kind == .zahlung)
+    }
+
+    @Test func ausgleichVerbuchen() async throws {
+        let transport = FakeTransport { _ in
+            (201, """
+            {"householdId":"h2",
+             "balances":[{"personId":"pa","displayName":"Person A","claimedCents":4000,"repaidCents":4000,
+               "debtCents":0,"paidBackCents":0,"openCents":0}],
+             "openItems":[],"openDebts":[],
+             "manual":[{"id":"m1","personId":"pa","kind":"verrechnung","amountCents":4000,"settledOn":"2026-11-17",
+               "note":"Grillabend","createdAt":"2026-11-17T10:00:00.000Z"}]}
+            """)
+        }
+        let s = try await service(transport).recordSettlement(
+            householdId: "h2",
+            input: SettlementInput(amountCents: 4_000, kind: .verrechnung, settledOn: "2026-11-17", note: "Grillabend")
+        )
+        let request = try #require(transport.requests.first)
+        #expect(request.method == .post)
+        #expect(request.path == "/v1/households/h2/settlements")
+        #expect(request.body?["amountCents"] as? Int == 4_000)
+        #expect(request.body?["kind"] as? String == "verrechnung")
+        #expect(request.body?["settledOn"] as? String == "2026-11-17")
+        #expect(request.body?["note"] as? String == "Grillabend")
+        #expect(s.balances.first?.openCents == 0)
+        #expect(s.manual.first?.kind == .verrechnung)
+    }
+
+    @Test func ausgleichOhneNotizSendetKeine() async throws {
+        let transport = FakeTransport { _ in
+            (201, #"{"householdId":"h2","balances":[],"openItems":[],"openDebts":[],"manual":[]}"#)
+        }
+        _ = try await service(transport).recordSettlement(
+            householdId: "h2", input: SettlementInput(amountCents: 500, kind: .zahlung, settledOn: "2026-11-10")
+        )
+        let body = try #require(transport.requests.first?.body)
+        #expect(body["kind"] as? String == "zahlung")
+        #expect(body["note"] == nil)
+    }
+
+    @Test func zuHoherAusgleichMeldetServer() async throws {
+        let transport = FakeTransport { _ in
+            (422, #"{"error":{"code":"ausgleich_zu_hoch","message":"Offen sind nur 4000 Cent, mehr lässt sich nicht verbuchen."}}"#)
+        }
+        do {
+            _ = try await service(transport).recordSettlement(
+                householdId: "h2", input: SettlementInput(amountCents: 5_000, kind: .zahlung, settledOn: "2026-11-10")
+            )
+            Issue.record("Fehler erwartet")
+        } catch {
+            #expect(code(error) == "ausgleich_zu_hoch")
+        }
+    }
+
+    @Test func ausgleichZuruecknehmen() async throws {
+        let transport = FakeTransport { _ in (204, "") }
+        try await service(transport).deleteSettlement(id: "m1")
+        #expect(transport.requests.first?.method == .delete)
+        #expect(transport.requests.first?.path == "/v1/settlements/m1")
+    }
+
+    @Test func fremdenAusgleichLehntServerAb() async throws {
+        let transport = FakeTransport { _ in
+            (403, #"{"error":{"code":"fremder_ausgleich","message":"Einen Ausgleich nimmt nur die Person zurück, die ihn verbucht hat."}}"#)
+        }
+        do {
+            try await service(transport).deleteSettlement(id: "m2")
+            Issue.record("Fehler erwartet")
+        } catch {
+            #expect(code(error) == "fremder_ausgleich")
+        }
+    }
+
+    private func code(_ error: any Error) -> String? {
+        (error as? APIError)?.code
     }
 }
 
