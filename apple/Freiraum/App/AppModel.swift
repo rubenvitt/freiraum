@@ -72,6 +72,11 @@ final class AppModel {
         return households.first { $0.id == account.householdId }
     }
 
+    /// Frühester Monat mit Budget (Budgetbeginn des gewählten Haushalts).
+    var budgetStartMonth: YearMonth {
+        selectedHousehold.flatMap { budgets[$0.id]?.startMonth } ?? YearMonth(year: 2000, month: 1)
+    }
+
     func account(_ id: String) -> Account? {
         accounts.first { $0.id == id }
     }

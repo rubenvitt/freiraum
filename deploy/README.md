@@ -30,18 +30,38 @@ Es gibt kein öffentliches Sign-up. Für jede Person einmal:
 docker compose exec backend node dist/cli.js person-anlegen "Name"
 ```
 
-Die Ausgabe enthält ein einmaliges Einladungs-Token (`fre_…`, 72 Stunden gültig). Damit
-registriert die App bzw. der Browser den ersten Passkey. Weitere Geräte oder Wiederherstellung:
+Die Ausgabe enthält ein einmaliges Einladungs-Token (`fre_…`, 72 Stunden gültig) und einen Link
+`https://<domain>/registrieren#token=fre_…`. Das Token steht im Fragment (`#…`) und geht damit nie
+an den Server oder in Logs.
 
-```bash
-docker compose exec backend node dist/cli.js personen
-```
+### Passkey im Browser anlegen
+
+1. `https://<domain>/registrieren` im Safari auf dem iPhone oder Mac öffnen (`/` leitet dorthin
+   weiter). Den Link aus der Ausgabe öffnen oder das Token einfügen.
+2. „Passkey anlegen“ → Face ID / Touch ID bestätigen → „Passkey angelegt für <Name>“.
+   Die Einladung ist damit verbraucht. Der Passkey liegt im iCloud-Schlüsselbund und steht so
+   auch auf den anderen Apple-Geräten der Person bereit.
+3. „Anmelden testen“ zeigt nach Face ID / Touch ID den eigenen Namen. Die Sitzungen, die dabei
+   entstehen, beendet die Seite sofort wieder; sie speichert nichts im Browser.
+4. Kontrolle auf dem Server:
+
+   ```bash
+   docker compose exec backend node dist/cli.js personen
+   ```
+
+Die Seite funktioniert nur über die Domain aus `WEBAUTHN_RP_ID` (bzw. eine Subdomain davon, die in
+`WEBAUTHN_ORIGINS` steht) und nur per HTTPS. Unter einer anderen Adresse meldet sie das.
+
+### Weitere Geräte und Wiederherstellung
+
+Gleiche Seite, neue Einladung:
 
 ```bash
 docker compose exec backend node dist/cli.js einladen <Person-ID>
 ```
 
-Tokens nicht in Chats oder Tickets ablegen; am besten direkt am Gerät eingeben.
+Die Person-ID zeigt `cli personen`. Tokens nicht in Chats oder Tickets ablegen; am besten den Link
+per AirDrop schicken oder das Token direkt am Gerät eingeben.
 
 ## Aktualisieren
 

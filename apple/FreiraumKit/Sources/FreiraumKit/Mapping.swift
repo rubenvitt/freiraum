@@ -45,7 +45,8 @@ extension BudgetMonth {
     init(_ b: Components.Schemas.BudgetMonth) throws {
         guard let month = YearMonth(b.month) else { throw MappingError(description: "Monat \(b.month)") }
         self.init(
-            householdId: b.householdId, month: month, closed: b.closedAt != nil,
+            householdId: b.householdId, month: month, startMonth: YearMonth(b.budgetStartMonth),
+            closed: b.closedAt != nil,
             readyToAssignCents: b.readyToAssignCents, inflowsCents: b.inflowsCents,
             unconfirmedTransactions: b.unconfirmedTransactions,
             pots: try b.pots.map { p in

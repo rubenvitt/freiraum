@@ -147,6 +147,8 @@ interface TxRow {
   counterparty_iban: string | null
   purpose: string | null
   status: 'importiert' | 'vorgeschlagen' | 'bestaetigt'
+  /** Buchungstag ab dem Budgetbeginn des Haushalts (nur aus `loadTransactions`). */
+  in_budget?: boolean
 }
 
 const toMatchable = (t: TxRow): MatchableTransaction => ({
@@ -159,6 +161,21 @@ const toMatchable = (t: TxRow): MatchableTransaction => ({
 
 const transactionNotFound = () =>
   new ApiError(404, 'buchung_nicht_gefunden', 'Diese Buchung gibt es nicht.')
+
+/** Abbruch eines LLM-Laufs nach so vielen Fehlern (Netzwerk, Zeit) in Folge. */
+export const LLM_MAX_FAILURES_IN_ROW = 3
+
+/**
+ * IBANs aus Freitext entfernen, bevor er an das Modell geht. Verwendungszwecke enthalten oft
+ * die IBAN der Gegenseite („IBAN: DE…“), das Modell braucht sie nicht.
+ */
+export function maskIbans(text: string | null): string | null {
+  if (text === null) return null
+  // Länderkürzel, Prüfziffern, dann Vierergruppen (mit oder ohne Leerzeichen) und ein Rest.
+  return text.replace(/\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,3})?\b/g, (match) =>
+    /\d{6}/.test(match.replace(/ /g, '')) ? '[IBAN]' : match,
+  )
+}
 
 const sameTarget = (a: Target, b: Target) => a.kind === b.kind && a.potId === b.potId
 
@@ -175,8 +192,11 @@ export class CategorizationService {
     if (ids.length === 0) return []
     return sql<TxRow[]>`
       select t.id, t.account_id, a.household_id, t.booking_date::text, t.amount_cents,
-             t.counterparty_name, t.counterparty_iban, t.purpose, t.status
-      from transactions t join accounts a on a.id = t.account_id
+             t.counterparty_name, t.counterparty_iban, t.purpose, t.status,
+             t.booking_date >= h.budget_start_month as in_budget
+      from transactions t
+      join accounts a on a.id = t.account_id
+      join households h on h.id = a.household_id
       where t.id = any(${ids}::uuid[])
     `
   }
@@ -286,8 +306,9 @@ export class CategorizationService {
    * oder nicht nötig, weil die Buchungen frisch sind).
    */
   async applyRules(tx: TransactionSql, transactionIds: string[], asOf: IsoDate): Promise<number> {
+    // Vor dem Budgetbeginn braucht es keine Vorschläge.
     const rows = (await this.loadTransactions(tx, transactionIds)).filter(
-      (t) => t.status !== 'bestaetigt',
+      (t) => t.status !== 'bestaetigt' && t.in_budget === true,
     )
     const rulesByHousehold = new Map<string, Rule[]>()
     const touched: TxRow[] = []
@@ -342,22 +363,33 @@ export class CategorizationService {
 
   /**
    * LLM-Vorschläge für Buchungen ohne Aufteilung holen, die noch nie gefragt wurden. Läuft
-   * außerhalb der Import-Transaktion (Netzwerk). Fehler des Modells lassen die Buchung
-   * unverändert („importiert“), sie wartet dann auf eine Person.
+   * außerhalb der Import-Transaktion (Netzwerk). Die Buchung bleibt unverändert („importiert“),
+   * wenn das Modell nichts Brauchbares liefert; sie wartet dann auf eine Person. Ist das Modell
+   * nicht erreichbar (Fehler, Zeitüberschreitung), bleibt sie ungefragt und kommt beim
+   * Nachholen wieder dran. Nach mehreren Fehlern in Folge bricht der Lauf ab, damit ein Ausfall
+   * große Importe nicht aufhält.
    */
   async suggestWithLlm(transactionIds: string[], asOf: IsoDate = todayUtc()): Promise<number> {
     if (!this.llm || transactionIds.length === 0) return 0
     const pending = await this.db<TxRow[]>`
       select t.id, t.account_id, a.household_id, t.booking_date::text, t.amount_cents,
              t.counterparty_name, t.counterparty_iban, t.purpose, t.status
-      from transactions t join accounts a on a.id = t.account_id
+      from transactions t
+      join accounts a on a.id = t.account_id
+      join households h on h.id = a.household_id
       where t.id = any(${transactionIds}::uuid[])
         and t.status = 'importiert' and t.llm_checked_at is null
+        and t.booking_date >= h.budget_start_month
       order by t.booking_date, t.id
     `
     let suggested = 0
+    let failuresInRow = 0
     const optionsByHousehold = new Map<string, LlmOption[]>()
-    for (const t of pending) {
+    for (const [index, t] of pending.entries()) {
+      if (failuresInRow >= LLM_MAX_FAILURES_IN_ROW) {
+        console.error(`LLM nicht erreichbar, ${pending.length - index} Buchungen später nachholen`)
+        break
+      }
       let options = optionsByHousehold.get(t.household_id)
       if (!options) {
         options = await this.llmOptions(t.household_id)
@@ -369,13 +401,16 @@ export class CategorizationService {
           transaction: {
             bookingDate: t.booking_date,
             amountCents: cents(t.amount_cents),
-            counterpartyName: t.counterparty_name,
-            purpose: t.purpose,
+            counterpartyName: maskIbans(t.counterparty_name),
+            purpose: maskIbans(t.purpose),
           },
           options,
         })
+        failuresInRow = 0
       } catch (err) {
         console.error('LLM-Vorschlag fehlgeschlagen', err instanceof Error ? err.message : err)
+        failuresInRow++
+        continue
       }
       const valid =
         result !== null &&
@@ -415,6 +450,28 @@ export class CategorizationService {
       })
     }
     return suggested
+  }
+
+  /**
+   * Buchungen nachholen, die beim Import nicht gefragt werden konnten (Modell nicht erreichbar).
+   * Nur jüngst importierte, damit das Einschalten des LLM nicht die ganze Historie abfragt.
+   */
+  async retryLlmSuggestions(
+    options: { limit?: number; withinDays?: number } = {},
+    asOf: IsoDate = todayUtc(),
+  ): Promise<number> {
+    if (!this.llm) return 0
+    const rows = await this.db<{ id: string }[]>`
+      select id from transactions
+      where status = 'importiert' and llm_checked_at is null
+        and created_at > now() - make_interval(days => ${options.withinDays ?? 7})
+      order by created_at, id
+      limit ${options.limit ?? 200}
+    `
+    return this.suggestWithLlm(
+      rows.map((r) => r.id),
+      asOf,
+    )
   }
 
   private async llmOptions(householdId: string): Promise<LlmOption[]> {
@@ -733,8 +790,9 @@ export class CategorizationService {
     const rows = await this.db<{ id: string }[]>`
       select t.id from transactions t
       join accounts a on a.id = t.account_id
+      join households h on h.id = a.household_id
       join household_members m on m.household_id = a.household_id and m.person_id = ${personId}
-      where t.status <> 'bestaetigt'
+      where t.status <> 'bestaetigt' and t.booking_date >= h.budget_start_month
         ${filter.householdId ? this.db`and a.household_id = ${filter.householdId}` : this.db``}
       order by t.booking_date desc, t.created_at desc, t.id
       limit ${filter.limit}

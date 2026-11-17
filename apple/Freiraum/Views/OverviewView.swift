@@ -129,7 +129,9 @@ struct MonthMenu: View {
 
     var body: some View {
         Menu {
-            Button("Vormonat (\(model.month.previous.title))") { Task { await model.show(month: model.month.previous) } }
+            if model.month > model.budgetStartMonth {
+                Button("Vormonat (\(model.month.previous.title))") { Task { await model.show(month: model.month.previous) } }
+            }
             if model.month != .current() {
                 Button("Aktueller Monat") { Task { await model.show(month: .current()) } }
             }

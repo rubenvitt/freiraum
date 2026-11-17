@@ -120,6 +120,8 @@ public struct BudgetPot: Hashable, Sendable, Codable, Identifiable {
 public struct BudgetMonth: Hashable, Sendable, Codable {
     public let householdId: String
     public let month: YearMonth
+    /// Budgetbeginn des Haushalts; Monate davor sind leer.
+    public let startMonth: YearMonth?
     public let closed: Bool
     /// „Noch ohne Aufgabe“
     public let readyToAssignCents: Int
@@ -128,11 +130,12 @@ public struct BudgetMonth: Hashable, Sendable, Codable {
     public let pots: [BudgetPot]
 
     public init(
-        householdId: String, month: YearMonth, closed: Bool = false, readyToAssignCents: Int,
+        householdId: String, month: YearMonth, startMonth: YearMonth? = nil, closed: Bool = false, readyToAssignCents: Int,
         inflowsCents: Int = 0, unconfirmedTransactions: Int = 0, pots: [BudgetPot]
     ) {
         self.householdId = householdId
         self.month = month
+        self.startMonth = startMonth
         self.closed = closed
         self.readyToAssignCents = readyToAssignCents
         self.inflowsCents = inflowsCents

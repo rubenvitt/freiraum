@@ -39,6 +39,11 @@ pnpm dev
 | `INVITATION_TTL_HOURS` | nein | `72` | Gültigkeit einer Einladung |
 | `MIGRATE_ON_START` | nein | `true` | Migrationen beim Start anwenden |
 | `PORT` | nein | `3000` | HTTP-Port |
+| `LLM_API_KEY` | nein | | Schlüssel für OpenRouter; ohne ihn bleibt das LLM aus (nur Regeln schlagen vor) |
+| `LLM_MODEL` | mit Schlüssel | | Modell, z. B. `anbieter/modell`; es muss strukturierte Ausgabe (JSON-Schema) können |
+| `LLM_BASE_URL` | nein | `https://openrouter.ai/api/v1` | andere OpenAI-kompatible Schnittstelle, etwa ein lokales Modell |
+| `LLM_TIMEOUT_MS` | nein | `20000` | Zeitlimit je Anfrage |
+| `LLM_ZDR` | nein | `true` | bei OpenRouter nur Anbieter ohne Datenspeicherung (Zero Data Retention) |
 
 ## Anmeldung (Ablauf)
 
@@ -46,6 +51,10 @@ pnpm dev
 2. Gerät erzeugt den Passkey → `POST /v1/auth/registration/verify` → Sitzung (`token`)
 3. Später: `POST /v1/auth/login/options` → `POST /v1/auth/login/verify` → Sitzung
 4. Alle weiteren Aufrufe mit `Authorization: Bearer <token>`
+
+Ohne App geht Schritt 1–2 im Browser unter `/registrieren` (statische Seite aus `public/`, ohne
+Build-Schritt, strenge CSP, nicht Teil des OpenAPI-Vertrags). Die Seite hat auch „Anmelden
+testen“ (Schritt 3 plus `GET /v1/me`). Ablauf im Betrieb: [`deploy/README.md`](../deploy/README.md).
 
 Den vollständigen Vertrag beschreibt [`openapi/openapi.yaml`](../openapi/openapi.yaml).
 
@@ -67,6 +76,11 @@ Den vollständigen Vertrag beschreibt [`openapi/openapi.yaml`](../openapi/openap
 
 Rechenregeln und Begründungen: [ADR 0003](../docs/adr/0003-budget-kern.md).
 
+- **Budgetbeginn** je Haushalt (`GET`/`PUT /v1/households/{id}/budget-start`): Buchungen vor
+  dem Startmonat zählen nicht im Budget und bekommen keine Vorschläge (Import und Serien behalten
+  sie). Neue Haushalte starten im laufenden Monat. Der **Anfangsbestand** im Startmonat ergibt
+  sich aus den Kontoständen (`PUT /v1/accounts/{id}/balance`, Stand am Ende eines Tages) minus
+  den Buchungen ab Startmonat bis zum Stichtag und fließt in „Noch ohne Aufgabe“.
 - **Töpfe** je Haushalt (`/v1/households/{id}/pots`): `monatlich`, `ruecklage` (Jahresbetrag),
   `ziel` (Zielbetrag, optional Zielmonat), `erst_ich` (fester Monatsbetrag oder Anteil der
   Einnahmen). Archivieren nur, wenn der Topf leer ist.
@@ -84,4 +98,7 @@ Rechenregeln und Begründungen: [ADR 0003](../docs/adr/0003-budget-kern.md).
   was auf Bestätigung wartet; `POST /v1/transactions/{id}/confirm` bestätigt mit einem Tipp,
   `PUT /v1/transactions/{id}/splits` korrigiert oder teilt auf. Eine Korrektur wird zur Regel
   (`/v1/households/{id}/rules`) und schlägt offene Buchungen neu vor.
-- Ein LLM ist noch nicht angebunden (`src/categorize/llm.ts` ist die Schnittstelle).
+- **LLM-Vorschläge** über OpenRouter, sobald `LLM_API_KEY` und `LLM_MODEL` gesetzt sind. Das
+  Modell sieht Datum, Betrag, Gegenpartei-Name, Verwendungszweck (IBANs maskiert) und die Töpfe
+  des Haushalts, sonst nichts. Ist es nicht erreichbar, holt der Server die Vorschläge alle 15
+  Minuten nach. Details und Abwägung: ADR 0003.
