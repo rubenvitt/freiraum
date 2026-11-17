@@ -5,16 +5,21 @@
  * - Aus dem privaten Haushalt der anderen Person kommt nur, was sie freigegeben hat
  *   (`shares`). Freigaben gelten nur zwischen Personen mit gemeinsamem Haushalt und werden bei
  *   jeder Anfrage neu geprüft; Zurücknehmen wirkt sofort.
- * - Kennzahlen sind Anteile und Ja/Nein, keine Beträge: Aus „Erst ich erledigt“ lässt sich
- *   kein Einkommen zurückrechnen.
+ * - Kennzahlen sind Anteile und Ja/Nein, keine Beträge: Aus „Erst ich erledigt“ oder der
+ *   Sparquote lässt sich kein Einkommen zurückrechnen.
  * - Das Soll einer Einzahlungsregel „Prozent vom Netto“ verrät das Einkommen. Die andere Person
  *   sieht es nur mit der Freigabe `einzahlung_soll`; ein fester Betrag ist ohnehin bekannt.
  * - Wer eine private Buchung einem gemeinsamen Topf zuordnet, macht sie fürs Gemeinsame
  *   sichtbar, aber nur Datum, Gegenpartei und den gemeinsamen Anteil, nicht Konto oder Zweck.
+ * - Umgekehrt (FREI-18): Eine Buchung des gemeinsamen Kontos im privaten Topf einer Person zeigt
+ *   der Ausgleich als Schuld mit Datum, Gegenpartei und privatem Anteil, ohne den Topf.
+ * - Eine Verrechnung mit der Einzahlung (FREI-28) ändert das private Budget einer Person. Deshalb
+ *   verbucht und nimmt sie nur diese Person selbst zurück, nie die andere.
  */
 import type { TransactionSql } from 'postgres'
+import type { AnalyticsService } from '../analytics/service.js'
 import { computeMonth, type PotKind } from '../budget/compute.js'
-import { firstDay, type Month } from '../budget/months.js'
+import { firstDay, type Month, monthOf } from '../budget/months.js'
 import type { BudgetService } from '../budget/service.js'
 import { cents } from '../db/cents.js'
 import type { Db } from '../db/client.js'
@@ -24,7 +29,13 @@ import { openClaims } from './settle.js'
 
 type Sql = Db | TransactionSql
 
-export const SHARE_SCOPES = ['erst_ich', 'ruecklagen', 'einzahlung_soll', 'budget'] as const
+export const SHARE_SCOPES = [
+  'erst_ich',
+  'ruecklagen',
+  'einzahlung_soll',
+  'budget',
+  'sparquote',
+] as const
 export type ShareScope = (typeof SHARE_SCOPES)[number]
 
 export interface ShareEntry {
@@ -48,12 +59,19 @@ export interface PotProgress {
   fundedPct: number | null
 }
 
+/** Sparquote im Monat (ADR 0005): Anteil statt Betrag. */
+export interface SavingsRate {
+  /** Gespart ÷ Einkommen in Prozent (abgerundet, kann negativ sein); null ohne Einkommen */
+  savingsRatePct: number | null
+}
+
 export interface Metrics {
   personId: string
   month: Month
   scopes: ShareScope[]
   erstIch: PotProgress | null
   ruecklagen: PotProgress | null
+  sparquote: SavingsRate | null
 }
 
 export interface ContributionRule {
@@ -79,7 +97,7 @@ export interface MemberContribution {
   /** Soll im Monat; null, wenn es nicht sichtbar ist oder es keine Regel gibt */
   targetCents: number | null
   targetVisible: boolean
-  /** Ist: Einzahlungen dieser Person aufs gemeinsame Konto im Monat */
+  /** Ist: Einzahlungen dieser Person aufs gemeinsame Konto im Monat, plus Verrechnungen */
   paidCents: number
   /** noch offen (Soll − Ist, nie negativ); null, wenn das Soll nicht sichtbar ist */
   remainingCents: number | null
@@ -96,9 +114,19 @@ export interface SettlementBalance {
   displayName: string
   /** privat bezahlte gemeinsame Ausgaben (abzüglich Gutschriften) */
   claimedCents: number
-  /** erstattet: Überweisungen vom gemeinsamen Konto plus von Hand verbucht */
+  /** erstattet: Überweisungen vom gemeinsamen Konto plus von Hand verbucht oder verrechnet */
   repaidCents: number
-  /** schuldet das Gemeinsame der Person noch (negativ = zu viel erstattet) */
+  /** vom gemeinsamen Konto bezahlte private Ausgaben (abzüglich Gutschriften), FREI-18 */
+  debtCents: number
+  /**
+   * zurückgezahlt: Überweisungen der Person aufs gemeinsame Konto (Art `ausgleich`) plus mit der
+   * Einzahlung verrechnet
+   */
+  paidBackCents: number
+  /**
+   * Saldo: schuldet das Gemeinsame der Person noch (positiv) oder die Person dem Gemeinsamen
+   * (negativ). Forderung und Schuld verrechnen sich.
+   */
   openCents: number
 }
 
@@ -112,9 +140,32 @@ export interface OpenClaim {
   openCents: number
 }
 
+/** Offene Schuld: Buchung des gemeinsamen Kontos im privaten Topf der Person. */
+export interface OpenDebt {
+  transactionId: string
+  personId: string
+  bookingDate: IsoDate
+  counterpartyName: string | null
+  /** privater Anteil der Buchung */
+  amountCents: number
+  openCents: number
+}
+
+export const SETTLEMENT_KINDS = ['zahlung', 'verrechnung'] as const
+/**
+ * zahlung = Geld außerhalb der Konten erhalten (z. B. bar), ohne Wirkung aufs Budget;
+ * verrechnung = mit der Einzahlung verrechnet, zählt wie eine Einzahlung (FREI-28).
+ */
+export type SettlementKind = (typeof SETTLEMENT_KINDS)[number]
+
 export interface ManualSettlement {
   id: string
   personId: string
+  kind: SettlementKind
+  /**
+   * Positiv = das Gemeinsame erstattet der Person; negativ = die Person zahlt dem Gemeinsamen
+   * zurück (nur bei `verrechnung`).
+   */
   amountCents: number
   settledOn: IsoDate
   note: string | null
@@ -125,6 +176,7 @@ export interface SettlementsView {
   householdId: string
   balances: SettlementBalance[]
   openItems: OpenClaim[]
+  openDebts: OpenDebt[]
   manual: ManualSettlement[]
 }
 
@@ -166,6 +218,7 @@ export class CoupleService {
   constructor(
     private readonly db: Db,
     private readonly budget: BudgetService,
+    private readonly analytics: AnalyticsService,
   ) {}
 
   // --- Zugriff -----------------------------------------------------------------
@@ -338,12 +391,21 @@ export class CoupleService {
       if (scopes.has('erst_ich')) erstIch = progress('erst_ich')
       if (scopes.has('ruecklagen')) ruecklagen = progress('ruecklage')
     }
+    let sparquote: SavingsRate | null = null
+    if (scopes.has('sparquote')) {
+      const m = await this.analytics.monthMetricsUnchecked(household.id, month)
+      sparquote = {
+        // Abgerundet wie die übrigen Anteile; nur der Prozentwert verlässt den Server.
+        savingsRatePct: m.incomeCents > 0 ? Math.floor((100 * m.savedCents) / m.incomeCents) : null,
+      }
+    }
     return {
       personId,
       month,
       scopes: SHARE_SCOPES.filter((s) => scopes.has(s)),
       erstIch,
       ruecklagen,
+      sparquote,
     }
   }
 
@@ -433,14 +495,22 @@ export class CoupleService {
         order by person_id, valid_from desc
       `
     ).map(toRule)
+    // Verrechnungen zählen wie Einzahlungen (FREI-28): eine verrechnete Forderung mehr, eine
+    // verrechnete Schuld weniger.
     const paid = await this.db<{ person_id: string; amount_cents: string }[]>`
-      select s.person_id, sum(s.amount_cents) as amount_cents
-      from transaction_splits s
-      join transactions t on t.id = s.transaction_id
-      join accounts a on a.id = t.account_id
-      where a.household_id = ${householdId} and s.kind = 'einzahlung'
-        and to_char(t.booking_date, 'YYYY-MM') = ${month}
-      group by s.person_id
+      select person_id, sum(amount_cents) as amount_cents from (
+        select s.person_id, s.amount_cents
+        from transaction_splits s
+        join transactions t on t.id = s.transaction_id
+        join accounts a on a.id = t.account_id
+        where a.household_id = ${householdId} and s.kind = 'einzahlung'
+          and to_char(t.booking_date, 'YYYY-MM') = ${month}
+        union all
+        select person_id, amount_cents from settlements
+        where household_id = ${householdId} and kind = 'verrechnung'
+          and to_char(settled_on, 'YYYY-MM') = ${month}
+      ) x
+      group by person_id
     `
     const paidBy = new Map(paid.map((p) => [p.person_id, cents(p.amount_cents)]))
     const result: MemberContribution[] = []
@@ -491,7 +561,9 @@ export class CoupleService {
   /**
    * Was das Gemeinsame jeder Person schuldet: Ausgaben von privaten Konten in gemeinsamen
    * Töpfen minus Erstattungen (Überweisungen vom gemeinsamen Konto und von Hand verbucht).
-   * Alles wird aus den Aufteilungen neu gerechnet, nichts fortgeschrieben.
+   * Umgekehrt mindern Ausgaben vom gemeinsamen Konto in privaten Töpfen den Saldo, bis die
+   * Person sie zurückzahlt (FREI-18). Alles wird aus den Aufteilungen neu gerechnet, nichts
+   * fortgeschrieben.
    */
   async settlements(viewerId: string, householdId: string): Promise<SettlementsView> {
     await this.sharedHousehold(this.db, viewerId, householdId)
@@ -524,8 +596,32 @@ export class CoupleService {
       group by t.id, h.owner_person_id
       order by t.booking_date, t.created_at, t.id
     `
-    const transfers = await sql<{ person_id: string; amount_cents: string }[]>`
-      select s.person_id, -sum(s.amount_cents) as amount_cents
+    const debts = await sql<
+      {
+        transaction_id: string
+        person_id: string
+        booking_date: string
+        counterparty_name: string | null
+        amount_cents: string
+      }[]
+    >`
+      select t.id as transaction_id, hp.owner_person_id as person_id, t.booking_date::text,
+             t.counterparty_name, -sum(s.amount_cents) as amount_cents
+      from transaction_splits s
+      join pots p on p.id = s.pot_id
+      join households hp on hp.id = p.household_id
+      join transactions t on t.id = s.transaction_id
+      join accounts a on a.id = t.account_id
+      where a.household_id = ${householdId} and hp.kind = 'privat'
+      group by t.id, hp.owner_person_id
+      order by t.booking_date, t.created_at, t.id
+    `
+    // Gezählt wird die Seite des gemeinsamen Kontos: Ausgang = Erstattung an die Person,
+    // Eingang = Rückzahlung der Person.
+    const transfers = await sql<{ person_id: string; repaid: string; paid_back: string }[]>`
+      select s.person_id,
+             coalesce(-sum(s.amount_cents) filter (where s.amount_cents < 0), 0) as repaid,
+             coalesce(sum(s.amount_cents) filter (where s.amount_cents > 0), 0) as paid_back
       from transaction_splits s
       join transactions t on t.id = s.transaction_id
       join accounts a on a.id = t.account_id
@@ -536,62 +632,80 @@ export class CoupleService {
       {
         id: string
         person_id: string
+        kind: SettlementKind
         amount_cents: string
         settled_on: string
         note: string | null
         created_at: Date
       }[]
     >`
-      select id, person_id, amount_cents, settled_on::text, note, created_at from settlements
+      select id, person_id, kind, amount_cents, settled_on::text, note, created_at from settlements
       where household_id = ${householdId}
       order by settled_on desc, created_at desc
     `
     const balances: SettlementBalance[] = []
     const openItems: OpenClaim[] = []
+    const openDebts: OpenDebt[] = []
+    const sumCents = (rows: { amount_cents: string }[]) =>
+      rows.reduce((sum, r) => sum + cents(r.amount_cents), 0)
     for (const m of members) {
       const own = claims.filter((c) => c.person_id === m.id)
-      const claimed = own.reduce((sum, c) => sum + cents(c.amount_cents), 0)
+      const owed = debts.filter((d) => d.person_id === m.id)
+      const transfer = transfers.find((t) => t.person_id === m.id)
+      const claimed = sumCents(own)
+      const debt = sumCents(owed)
+      const byHand = manual.filter((s) => s.person_id === m.id).map((s) => cents(s.amount_cents))
       const repaid =
-        cents(transfers.find((t) => t.person_id === m.id)?.amount_cents ?? 0) +
-        manual
-          .filter((s) => s.person_id === m.id)
-          .reduce((sum, s) => sum + cents(s.amount_cents), 0)
+        cents(transfer?.repaid ?? 0) + byHand.filter((c) => c > 0).reduce((sum, c) => sum + c, 0)
+      const paidBack =
+        cents(transfer?.paid_back ?? 0) - byHand.filter((c) => c < 0).reduce((sum, c) => sum + c, 0)
       balances.push({
         personId: m.id,
         displayName: m.display_name,
         claimedCents: claimed,
         repaidCents: repaid,
-        openCents: claimed - repaid,
+        debtCents: debt,
+        paidBackCents: paidBack,
+        openCents: claimed - repaid - (debt - paidBack),
       })
-      const open = openClaims(
-        own.map((c) => ({ id: c.transaction_id, amountCents: cents(c.amount_cents) })),
-        repaid,
-      )
-      for (const c of own) {
-        const rest = open.get(c.transaction_id)
-        if (rest === undefined) continue
-        openItems.push({
-          transactionId: c.transaction_id,
-          personId: m.id,
-          bookingDate: c.booking_date,
-          counterpartyName: c.counterparty_name,
-          amountCents: cents(c.amount_cents),
-          openCents: rest,
+      // Forderung und Schuld decken sich gegenseitig, jeweils älteste zuerst.
+      const items = (rows: typeof own, credit: number) => {
+        const open = openClaims(
+          rows.map((r) => ({ id: r.transaction_id, amountCents: cents(r.amount_cents) })),
+          credit,
+        )
+        return rows.flatMap((r) => {
+          const rest = open.get(r.transaction_id)
+          return rest === undefined
+            ? []
+            : [
+                {
+                  transactionId: r.transaction_id,
+                  personId: m.id,
+                  bookingDate: r.booking_date,
+                  counterpartyName: r.counterparty_name,
+                  amountCents: cents(r.amount_cents),
+                  openCents: rest,
+                },
+              ]
         })
       }
+      openItems.push(...items(own, repaid + debt - paidBack))
+      openDebts.push(...items(owed, paidBack + claimed - repaid))
     }
-    openItems.sort(
-      (a, b) =>
-        b.bookingDate.localeCompare(a.bookingDate) ||
-        a.transactionId.localeCompare(b.transactionId),
-    )
+    const newestFirst = (a: OpenClaim, b: OpenClaim) =>
+      b.bookingDate.localeCompare(a.bookingDate) || a.transactionId.localeCompare(b.transactionId)
+    openItems.sort(newestFirst)
+    openDebts.sort(newestFirst)
     return {
       householdId,
       balances,
       openItems,
+      openDebts,
       manual: manual.map((s) => ({
         id: s.id,
         personId: s.person_id,
+        kind: s.kind,
         amountCents: cents(s.amount_cents),
         settledOn: s.settled_on,
         note: s.note,
@@ -601,51 +715,99 @@ export class CoupleService {
   }
 
   /**
-   * Ausgleich von Hand verbuchen (z. B. bar erhalten). Nur für die eigene Forderung: Wer Geld
-   * bekommen hat, bestätigt das selbst. Höchstens so viel, wie noch offen ist.
+   * Ausgleich von Hand verbuchen, nur für den eigenen Saldo und höchstens so viel, wie offen ist.
+   *
+   * - `zahlung` (Standard): Geld außerhalb der Konten erhalten, z. B. bar. Nur für die eigene
+   *   Forderung: Wer Geld bekommen hat, bestätigt das selbst.
+   * - `verrechnung` (FREI-28): mit der Einzahlung verrechnet. Bei einer Forderung zählt der
+   *   Betrag als Erstattung und als zusätzliche Einzahlung, bei einer Schuld als Rückzahlung
+   *   und als geringere Einzahlung. Die Richtung ergibt sich aus dem Saldo. Weil das private
+   *   Budget der Person mitrechnet, nicht in abgeschlossenen Monaten und nicht vor dem
+   *   Budgetbeginn eines der beiden Haushalte.
    */
   async recordSettlement(
     personId: string,
     householdId: string,
-    input: { amountCents: number; settledOn?: IsoDate | undefined; note?: string | undefined },
+    input: {
+      amountCents: number
+      kind?: SettlementKind | undefined
+      settledOn?: IsoDate | undefined
+      note?: string | undefined
+    },
   ): Promise<SettlementsView> {
+    const kind = input.kind ?? 'zahlung'
+    const settledOn = input.settledOn ?? todayUtc()
     return this.db.begin(async (tx) => {
+      const households =
+        kind === 'verrechnung' ? await this.lockForOffset(tx, personId, householdId) : []
       await this.sharedHousehold(tx, personId, householdId, true)
       const before = await this.loadSettlements(tx, householdId)
       const open = before.balances.find((b) => b.personId === personId)?.openCents ?? 0
-      if (input.amountCents > open) {
+      // Eine Zahlung gibt es nur für eine Forderung; verrechnen lässt sich beides.
+      const sign = kind === 'verrechnung' && open < 0 ? -1 : 1
+      if (input.amountCents > sign * open) {
         throw new ApiError(
           422,
           'ausgleich_zu_hoch',
-          `Offen sind nur ${Math.max(0, open)} Cent, mehr lässt sich nicht verbuchen.`,
+          `Offen sind nur ${Math.max(0, sign * open)} Cent, mehr lässt sich nicht verbuchen.`,
         )
       }
+      for (const id of households) await this.budget.requireOpenMonth(tx, id, monthOf(settledOn))
       await tx`
-        insert into settlements (household_id, person_id, amount_cents, settled_on, note, created_by)
-        values (${householdId}, ${personId}, ${input.amountCents},
-                ${input.settledOn ?? todayUtc()}, ${input.note?.trim() || null}, ${personId})
+        insert into settlements
+          (household_id, person_id, kind, amount_cents, settled_on, note, created_by)
+        values (${householdId}, ${personId}, ${kind}, ${sign * input.amountCents}, ${settledOn},
+                ${input.note?.trim() || null}, ${personId})
       `
+      for (const id of households) await this.budget.runErstIch(tx, id, monthOf(settledOn))
       return this.loadSettlements(tx, householdId)
     })
   }
 
+  /**
+   * Gemeinsamer und privater Haushalt, deren Budgets eine Verrechnung der Person ändert, nach
+   * ID gesperrt (feste Reihenfolge gegen Verklemmungen).
+   */
+  private async lockForOffset(
+    tx: TransactionSql,
+    personId: string,
+    householdId: string,
+  ): Promise<string[]> {
+    const rows = await tx<{ id: string }[]>`
+      select id from households
+      where id = ${householdId} or (kind = 'privat' and owner_person_id = ${personId})
+      order by id
+      for update
+    `
+    return rows.map((r) => r.id)
+  }
+
   /** Von Hand verbuchten Ausgleich zurücknehmen, nur den eigenen. */
   async deleteSettlement(personId: string, settlementId: string): Promise<void> {
-    const [row] = await this.db<{ person_id: string }[]>`
-      select s.person_id from settlements s
-      join household_members m on m.household_id = s.household_id and m.person_id = ${personId}
-      where s.id = ${settlementId}
-    `
-    if (!row) {
-      throw new ApiError(404, 'ausgleich_nicht_gefunden', 'Diesen Ausgleich gibt es nicht.')
-    }
-    if (row.person_id !== personId) {
-      throw new ApiError(
-        403,
-        'fremder_ausgleich',
-        'Einen Ausgleich nimmt nur die Person zurück, die das Geld bekommen hat.',
-      )
-    }
-    await this.db`delete from settlements where id = ${settlementId}`
+    await this.db.begin(async (tx) => {
+      const [row] = await tx<
+        { person_id: string; household_id: string; kind: SettlementKind; settled_on: string }[]
+      >`
+        select s.person_id, s.household_id, s.kind, s.settled_on::text from settlements s
+        join household_members m on m.household_id = s.household_id and m.person_id = ${personId}
+        where s.id = ${settlementId}
+      `
+      if (!row) {
+        throw new ApiError(404, 'ausgleich_nicht_gefunden', 'Diesen Ausgleich gibt es nicht.')
+      }
+      if (row.person_id !== personId) {
+        throw new ApiError(
+          403,
+          'fremder_ausgleich',
+          'Einen Ausgleich nimmt nur die Person zurück, die ihn verbucht hat.',
+        )
+      }
+      const month = monthOf(row.settled_on)
+      const households =
+        row.kind === 'verrechnung' ? await this.lockForOffset(tx, personId, row.household_id) : []
+      for (const id of households) await this.budget.requireOpenMonth(tx, id, month)
+      await tx`delete from settlements where id = ${settlementId}`
+      for (const id of households) await this.budget.runErstIch(tx, id, month)
+    })
   }
 }

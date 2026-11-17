@@ -8,6 +8,7 @@ struct OverviewView: View {
     @State private var showDistribute = false
     @State private var showSettings = false
     @State private var showCash = false
+    @State private var contributionsOf: Household?
 
     var body: some View {
         NavigationStack {
@@ -46,6 +47,7 @@ struct OverviewView: View {
         .sheet(isPresented: $showDistribute) { DistributeView() }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showCash) { CashExpenseView() }
+        .sheet(item: $contributionsOf) { household in ContributionsView(household: household) }
     }
 
     private var header: some View {
@@ -85,6 +87,10 @@ struct OverviewView: View {
             }
             .buttonStyle(.plain)
             .accessibilityHint("Öffnet „Barausgabe erfassen“")
+        }
+
+        if let household = model.selectedHousehold, let contributions = model.contributionsState(for: household) {
+            ContributionsCard(state: contributions) { contributionsOf = household }
         }
 
         if !state.erstIch.isEmpty {
