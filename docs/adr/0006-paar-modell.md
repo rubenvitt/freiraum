@@ -104,5 +104,5 @@ Buchungen von Hand zu (oder legt eine Regel an, die sie neu vorschlägt).
   eines Ausgleichs mit der nächsten Einzahlung sind nicht umgesetzt.
 - Das LLM bekommt weiterhin nur die Töpfe des Haushalts, zu dem das Konto gehört, also keine
   gemeinsamen Töpfe bei privaten Konten. Ob das reicht, zeigt der Alltag.
-- Welche Einzahlungsregel gilt, legen die beiden Personen gemeinsam fest; die Spec führt das
-  weiter unter „Offene Entscheidungen“.
+- Welche Einzahlungsregel gilt, legen die beiden Personen gemeinsam fest und tragen sie als Daten
+  ein (Art, Betrag bzw. Anteil, Startmonat). Freiraum gibt dafür nichts vor.
