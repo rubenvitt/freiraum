@@ -552,10 +552,12 @@ describe('Ausgleich', () => {
   })
 
   it('erlaubt gemeinsame Töpfe nur von privaten Konten der Mitglieder', async () => {
-    const { a, sharedId, sharedAccountId } = await couple()
+    const { a, b, sharedId, sharedAccountId } = await couple()
     const outsider = await person('Person C', null)
     const groceries = await pot(a.token, sharedId, { name: 'Lebensmittel', kind: 'monatlich' })
-    const privatePot = await pot(a.token, a.householdId, { name: 'Freizeit', kind: 'monatlich' })
+    // Seit FREI-18 darf das gemeinsame Konto den eigenen privaten Topf belasten, aber nie den
+    // der anderen Person.
+    const privatePot = await pot(b.token, b.householdId, { name: 'Freizeit', kind: 'monatlich' })
     const spend = { bookingDate: day(5), amountCents: -1_000, counterpartyName: 'Laden' }
     await importInto(outsider.token, outsider.accountId, [spend])
     await importInto(a.token, sharedAccountId, [spend])
@@ -597,6 +599,237 @@ describe('Ausgleich', () => {
       (await request('GET', `/v1/households/${a.householdId}/settlements`, undefined, a.token))
         .status,
     ).toBe(422)
+  })
+})
+
+describe('Umgekehrter Ausgleich', () => {
+  it('belastet den eigenen privaten Topf und führt die Ausgabe als Schuld ans Gemeinsame', async () => {
+    const { a, b, sharedId, sharedAccountId } = await couple()
+    await salary(a, 300_000)
+    const groceries = await pot(a.token, sharedId, { name: 'Lebensmittel', kind: 'monatlich' })
+    const books = await pot(a.token, a.householdId, { name: 'Bücher', kind: 'monatlich' })
+    const ownBefore = await budget(a.token, a.householdId)
+    const sharedBefore = await budget(a.token, sharedId)
+
+    await importInto(a.token, sharedAccountId, [
+      {
+        bookingDate: day(5),
+        amountCents: -2_500,
+        counterpartyName: 'Buchhandlung Beispiel',
+        purpose: 'Kartenzahlung 4711',
+      },
+      { bookingDate: day(6), amountCents: -4_000, counterpartyName: 'Supermarkt Beispiel' },
+    ])
+    const [groceryRun, bookshop] = await transactions(a.token, sharedAccountId)
+    expect(bookshop.counterpartyName).toBe('Buchhandlung Beispiel')
+
+    // Die andere Person darf den privaten Topf nicht wählen, auch nicht für die eigene Buchung.
+    const foreign = await setSplits(b.token, bookshop.id, [
+      { kind: 'topf', potId: books, amountCents: -2_500 },
+    ])
+    expect(foreign.status).toBe(422)
+    expect((await body(foreign)).error.code).toBe('topf_anderer_haushalt')
+
+    const own = await setSplits(a.token, bookshop.id, [
+      { kind: 'topf', potId: books, amountCents: -2_500 },
+    ])
+    expect(own.status).toBe(200)
+    // Eine private Ausgabe mit der gemeinsamen Karte ist ein Einzelfall: keine Regel.
+    expect((await body(own)).rule).toBeNull()
+
+    // Der private Topf trägt die Ausgabe; „Noch ohne Aufgabe“ bleibt auf beiden Seiten gleich.
+    const ownAfter = await budget(a.token, a.householdId)
+    expect(ownAfter.pots.find((p: Json) => p.potId === books).activityCents).toBe(-2_500)
+    expect(ownAfter.readyToAssignCents).toBe(ownBefore.readyToAssignCents)
+    expect((await budget(a.token, sharedId)).readyToAssignCents).toBe(
+      sharedBefore.readyToAssignCents,
+    )
+
+    const forB = await settlements(b.token, sharedId)
+    expect(forB.balances).toEqual([
+      expect.objectContaining({
+        personId: a.id,
+        claimedCents: 0,
+        debtCents: 2_500,
+        paidBackCents: 0,
+        openCents: -2_500,
+      }),
+      expect.objectContaining({ personId: b.id, debtCents: 0, openCents: 0 }),
+    ])
+    expect(forB.openItems).toEqual([])
+    expect(forB.openDebts).toEqual([
+      {
+        transactionId: bookshop.id,
+        personId: a.id,
+        bookingDate: day(5),
+        counterpartyName: 'Buchhandlung Beispiel',
+        amountCents: 2_500,
+        openCents: 2_500,
+      },
+    ])
+    // Vom privaten Topf sieht die andere Person keine Budgetdaten.
+    expect(JSON.stringify(forB)).not.toContain(books)
+    expect(
+      (
+        await request(
+          'GET',
+          `/v1/households/${a.householdId}/budget/${current}`,
+          undefined,
+          b.token,
+        )
+      ).status,
+    ).toBe(404)
+
+    // Gemischt: Ein Teil privat, der Rest gemeinsam.
+    expect(
+      (
+        await setSplits(
+          a.token,
+          groceryRun.id,
+          [
+            { kind: 'topf', potId: groceries, amountCents: -3_000 },
+            { kind: 'topf', potId: books, amountCents: -1_000 },
+          ],
+          false,
+        )
+      ).status,
+    ).toBe(200)
+    expect(
+      (await budget(a.token, sharedId)).pots.find((p: Json) => p.potId === groceries).activityCents,
+    ).toBe(-3_000)
+
+    // Forderung und Schuld verrechnen sich: 2.000 privat für Gemeinsames bezahlt.
+    await importInto(a.token, a.accountId, [
+      { bookingDate: day(7), amountCents: -2_000, counterpartyName: 'Drogerie Beispiel' },
+    ])
+    const drugstore = (await transactions(a.token, a.accountId)).find(
+      (t) => t.counterpartyName === 'Drogerie Beispiel',
+    ) as Json
+    await setSplits(a.token, drugstore.id, [
+      { kind: 'topf', potId: groceries, amountCents: -2_000 },
+    ])
+    const netted = await settlements(a.token, sharedId)
+    expect(netted.balances[0]).toMatchObject({
+      claimedCents: 2_000,
+      debtCents: 3_500,
+      openCents: -1_500,
+    })
+    expect(netted.openItems).toEqual([])
+    // Die älteste Schuld ist zuerst gedeckt.
+    expect(netted.openDebts).toEqual([
+      expect.objectContaining({
+        transactionId: groceryRun.id,
+        amountCents: 1_000,
+        openCents: 1_000,
+      }),
+      expect.objectContaining({ transactionId: bookshop.id, amountCents: 2_500, openCents: 500 }),
+    ])
+
+    // Von Hand lässt sich nur eine eigene Forderung verbuchen, keine Schuld.
+    const manual = await request(
+      'POST',
+      `/v1/households/${sharedId}/settlements`,
+      { amountCents: 1 },
+      a.token,
+    )
+    expect((await body(manual)).error.code).toBe('ausgleich_zu_hoch')
+
+    // Zurückzahlen: Überweisung aufs gemeinsame Konto, als Ausgleich statt Einzahlung.
+    await importInto(b.token, sharedAccountId, [
+      { bookingDate: day(8), amountCents: 1_500, counterpartyIban: IBAN_A, purpose: 'Bücher' },
+    ])
+    const payback = (await transactions(a.token, sharedAccountId)).find(
+      (t) => t.amountCents === 1_500,
+    ) as Json
+    expect(payback.splits).toEqual([
+      { kind: 'einzahlung', potId: null, personId: a.id, amountCents: 1_500 },
+    ])
+    const corrected = await setSplits(a.token, payback.id, [
+      { kind: 'ausgleich', personId: a.id, amountCents: 1_500 },
+    ])
+    expect(corrected.status).toBe(200)
+    // Keine Regel, sonst würden künftige Einzahlungen zum Ausgleich.
+    expect((await body(corrected)).rule).toBeNull()
+    const settled = await settlements(b.token, sharedId)
+    expect(settled.balances[0]).toMatchObject({ paidBackCents: 1_500, openCents: 0 })
+    expect(settled.openDebts).toEqual([])
+    // Die Rückzahlung ist keine Einzahlung und keine Einnahme des Gemeinsamen.
+    const contributions = await body(
+      await request(
+        'GET',
+        `/v1/households/${sharedId}/contributions/${current}`,
+        undefined,
+        a.token,
+      ),
+    )
+    expect(contributions.members[0]).toMatchObject({ personId: a.id, paidCents: 0 })
+    expect((await budget(a.token, sharedId)).readyToAssignCents).toBe(
+      sharedBefore.readyToAssignCents,
+    )
+
+    // Auf dem privaten Konto ist die Überweisung ebenfalls ein Ausgleich, ohne Wirkung aufs Budget.
+    await importInto(a.token, a.accountId, [
+      { bookingDate: day(8), amountCents: -1_500, counterpartyIban: IBAN_SHARED },
+    ])
+    const out = (await transactions(a.token, a.accountId)).find(
+      (t) => t.amountCents === -1_500,
+    ) as Json
+    expect(
+      (await setSplits(a.token, out.id, [{ kind: 'ausgleich', amountCents: -1_500 }])).status,
+    ).toBe(200)
+    expect((await budget(a.token, a.householdId)).readyToAssignCents).toBe(
+      ownBefore.readyToAssignCents,
+    )
+  })
+
+  it('lässt private Töpfe nicht in Regeln des Gemeinsamen und prüft die Datenbank', async () => {
+    const { a, sharedId, sharedAccountId } = await couple()
+    const outsider = await person('Person C', null)
+    const books = await pot(a.token, a.householdId, { name: 'Bücher', kind: 'monatlich' })
+    const strange = await pot(outsider.token, outsider.householdId, {
+      name: 'Fremd',
+      kind: 'monatlich',
+    })
+
+    // Eine Regel im Gemeinsamen träfe auch die Käufe der anderen Person.
+    const rule = await request(
+      'POST',
+      `/v1/households/${sharedId}/rules`,
+      { counterpartyName: 'Buchhandlung Beispiel', kind: 'topf', potId: books },
+      a.token,
+    )
+    expect(rule.status).toBe(422)
+    expect((await body(rule)).error.code).toBe('regel_privater_topf')
+
+    // Ein Ausgleich ohne Regelrichtung bekommt weiterhin die übliche Richtung.
+    const refundRule = await request(
+      'POST',
+      `/v1/households/${sharedId}/rules`,
+      { counterpartyIban: IBAN_A, kind: 'ausgleich', personId: a.id },
+      a.token,
+    )
+    expect((await body(refundRule)).rule).toMatchObject({ direction: 'ausgang' })
+
+    await importInto(a.token, sharedAccountId, [
+      { bookingDate: day(5), amountCents: -1_000, counterpartyName: 'Laden' },
+    ])
+    const [spend] = await transactions(a.token, sharedAccountId)
+    await expect(
+      db.begin(async (tx) => {
+        await tx`delete from transaction_splits where transaction_id = ${spend.id}`
+        await tx`
+          insert into transaction_splits (transaction_id, kind, pot_id, amount_cents)
+          values (${spend.id}, 'topf', ${strange}, -1000)
+        `
+      }),
+    ).rejects.toThrow(/Topf gehört nicht zum Haushalt/)
+    await db.begin(async (tx) => {
+      await tx`delete from transaction_splits where transaction_id = ${spend.id}`
+      await tx`
+        insert into transaction_splits (transaction_id, kind, pot_id, amount_cents)
+        values (${spend.id}, 'topf', ${books}, -1000)
+      `
+    })
   })
 })
 

@@ -1322,14 +1322,22 @@ components:
               repaidCents:
                 type: integer
                 description: erstattet (Überweisung, von Hand)
+              debtCents:
+                type: integer
+                description: vom gemeinsamen Konto bezahlte private Ausgaben
+              paidBackCents:
+                type: integer
+                description: zurückgezahlt (Überweisung aufs gemeinsame Konto)
               openCents:
                 type: integer
-                description: schuldet das Gemeinsame der Person noch; negativ = zu viel
+                description: "Saldo: positiv = schuldet das Gemeinsame der Person, negativ = schuldet die Person dem Gemeinsamen"
             required:
               - personId
               - displayName
               - claimedCents
               - repaidCents
+              - debtCents
+              - paidBackCents
               - openCents
         openItems:
           type: array
@@ -1362,6 +1370,38 @@ components:
               - counterpartyName
               - amountCents
               - openCents
+        openDebts:
+          type: array
+          items:
+            type: object
+            properties:
+              transactionId:
+                type: string
+                format: uuid
+              personId:
+                type: string
+                format: uuid
+              bookingDate:
+                type: string
+                format: date
+                example: 2026-11-03
+              counterpartyName:
+                type:
+                  - string
+                  - "null"
+              amountCents:
+                type: integer
+                description: privater Anteil der Buchung
+              openCents:
+                type: integer
+            required:
+              - transactionId
+              - personId
+              - bookingDate
+              - counterpartyName
+              - amountCents
+              - openCents
+          description: Buchungen des gemeinsamen Kontos in privaten Töpfen, die noch nicht zurückgezahlt oder mit Forderungen verrechnet sind (ohne den Topf selbst)
         manual:
           type: array
           items:
@@ -1397,6 +1437,7 @@ components:
         - householdId
         - balances
         - openItems
+        - openDebts
         - manual
     Flow:
       type: object
@@ -3745,8 +3786,8 @@ paths:
     get:
       tags:
         - Paar
-      summary: "Ausgleich: was das Gemeinsame jeder Person für privat bezahlte Ausgaben schuldet"
-      description: Entsteht, wenn eine Buchung eines privaten Kontos einem Topf des gemeinsamen Haushalts zugeordnet wird. Erledigt wird er durch eine Überweisung vom gemeinsamen Konto (Art ausgleich) oder von Hand. Erstattungen decken die Ausgaben der Reihe nach, älteste zuerst.
+      summary: "Ausgleich: was das Gemeinsame und die Personen einander schulden"
+      description: Eine Forderung entsteht, wenn eine Buchung eines privaten Kontos einem Topf des gemeinsamen Haushalts zugeordnet wird. Erledigt wird sie durch eine Überweisung vom gemeinsamen Konto (Art ausgleich) oder von Hand. Eine Schuld entsteht umgekehrt, wenn eine Buchung des gemeinsamen Kontos dem privaten Topf einer Person zugeordnet wird; sie zahlt sie per Überweisung aufs gemeinsame Konto (Art ausgleich) zurück. Forderung und Schuld verrechnen sich; Erstattungen decken der Reihe nach, älteste zuerst.
       security: *a1
       parameters:
         - schema:
