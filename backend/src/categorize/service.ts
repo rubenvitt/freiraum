@@ -718,6 +718,68 @@ export class CategorizationService {
     if (!row) throw new ApiError(404, 'regel_nicht_gefunden', 'Diese Regel gibt es nicht.')
   }
 
+  // --- Barausgaben ------------------------------------------------------------
+
+  /**
+   * Barausgabe erfassen: legt eine bestätigte Buchung im Bargeldkonto an, gleich einem Topf
+   * zugeordnet. Idempotent über `clientId` (die App erzeugt sie einmal je Eingabe, damit ein
+   * erneuter Versuch nach einem Netzfehler nichts doppelt anlegt). Lernt keine Regel.
+   */
+  async recordCashExpense(
+    personId: string,
+    accountId: string,
+    input: {
+      clientId: string
+      bookingDate: IsoDate
+      amountCents: number
+      description?: string | undefined
+      potId: string
+    },
+  ): Promise<{ transactionId: string; created: boolean }> {
+    if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) {
+      throw new ApiError(422, 'betrag_ungueltig', 'Der Betrag muss größer als 0 sein.')
+    }
+    return this.db.begin(async (tx) => {
+      const [account] = await tx<{ household_id: string; source: string }[]>`
+        select a.household_id, a.source from accounts a
+        join household_members m on m.household_id = a.household_id and m.person_id = ${personId}
+        where a.id = ${accountId}
+      `
+      if (!account) {
+        throw new ApiError(404, 'konto_nicht_gefunden', 'Dieses Konto gibt es nicht.')
+      }
+      if (account.source !== 'bar') {
+        throw new ApiError(
+          422,
+          'kein_bargeldkonto',
+          'Barausgaben lassen sich nur in einem Bargeldkonto erfassen.',
+        )
+      }
+      await this.lockHouseholdAccounts(tx, account.household_id)
+
+      const importKey = `app:${input.clientId}`
+      const [existing] = await tx<{ id: string }[]>`
+        select id from transactions where account_id = ${accountId} and import_key = ${importKey}
+      `
+      if (existing) return { transactionId: existing.id, created: false }
+
+      const target: Target = { kind: 'topf', potId: input.potId }
+      await this.checkTarget(tx, account.household_id, target)
+      const description = input.description?.trim() || null
+      const [row] = await tx<{ id: string }[]>`
+        insert into transactions (account_id, import_key, booking_date, amount_cents,
+          counterparty_name, status, confirmed_by, confirmed_at)
+        values (${accountId}, ${importKey}, ${input.bookingDate}, ${-input.amountCents},
+          ${description}, 'bestaetigt', ${personId}, now())
+        returning id
+      `
+      if (!row) throw new Error('Barausgabe konnte nicht angelegt werden')
+      // Eine Ausgabe ändert keine Einnahmen, deshalb läuft die Erst-ich-Automatik hier nicht.
+      await this.replaceSplits(tx, row.id, [{ ...target, amountCents: -input.amountCents }])
+      return { transactionId: row.id, created: true }
+    })
+  }
+
   // --- Offene Buchungen --------------------------------------------------------
 
   /** Buchungen, die auf Bestätigung warten, aus allen eigenen Haushalten (oder einem). */

@@ -1,0 +1,6 @@
+// Kopieren nach Local.xcconfig und anpassen. Local.xcconfig ist in .gitignore.
+// Team-ID aus developer.apple.com (Membership), Bundle-Präfix in umgekehrter Domain-Schreibweise.
+DEVELOPMENT_TEAM = ABCDE12345
+FREIRAUM_BUNDLE_PREFIX = de.example
+// Domain des Backends = WEBAUTHN_RP_ID (ohne https://). Muss apple-app-site-association ausliefern.
+FREIRAUM_DOMAIN = freiraum.example.org

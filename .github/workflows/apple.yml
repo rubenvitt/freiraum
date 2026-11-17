@@ -1,0 +1,47 @@
+name: Apple
+
+on:
+  push:
+    branches: [main]
+    paths: ['apple/**', 'openapi/**', '.github/workflows/apple.yml']
+  pull_request:
+    paths: ['apple/**', 'openapi/**', '.github/workflows/apple.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  # Logik, Client und Abbildung ohne Oberfläche: läuft unter Linux und prüft dabei auch,
+  # dass der generierte Client zum aktuellen openapi/openapi.yaml passt.
+  kit:
+    name: FreiraumKit (Linux)
+    runs-on: ubuntu-latest
+    container: swift:6.1-noble
+    defaults:
+      run:
+        working-directory: apple/FreiraumKit
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test
+
+  # App und Widget bauen (ohne Signatur). Persönliche Werte (Team, Domain) braucht es dafür nicht.
+  app:
+    name: App und Widget (Xcode)
+    runs-on: macos-26
+    defaults:
+      run:
+        working-directory: apple
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - run: xcodegen generate
+      - name: iOS
+        run: >-
+          xcodebuild build -project Freiraum.xcodeproj -scheme Freiraum
+          -destination 'generic/platform=iOS Simulator'
+          -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO
+      - name: macOS
+        run: >-
+          xcodebuild build -project Freiraum.xcodeproj -scheme Freiraum
+          -destination 'generic/platform=macOS'
+          -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO
