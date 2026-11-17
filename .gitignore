@@ -9,3 +9,6 @@ xcuserdata/
 DerivedData/
 .build/
 /data/
+# Apple: Projekt entsteht per XcodeGen, persönliche Werte bleiben lokal
+apple/Freiraum.xcodeproj/
+apple/Config/Local.xcconfig

@@ -1,0 +1,83 @@
+# Xcode-Projekt für Freiraum (iOS und macOS). Erzeugen mit `xcodegen generate` in apple/.
+# Persönliche Werte (Team, Bundle-Präfix, Domain) stehen in Config/Local.xcconfig, nicht im Repo.
+name: Freiraum
+options:
+  deploymentTarget:
+    iOS: "26.0"
+    macOS: "26.0"
+  developmentLanguage: de
+  createIntermediateGroups: true
+  groupSortPosition: top
+configFiles:
+  Debug: Config/Freiraum.xcconfig
+  Release: Config/Freiraum.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_STRICT_CONCURRENCY: complete
+packages:
+  FreiraumKit:
+    path: FreiraumKit
+targets:
+  Freiraum:
+    type: application
+    platform: auto
+    supportedDestinations: [iOS, macOS]
+    sources:
+      - Freiraum
+    dependencies:
+      - package: FreiraumKit
+      - target: FreiraumWidget
+        destinationFilters: [iOS]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(FREIRAUM_BUNDLE_PREFIX).freiraum
+        PRODUCT_NAME: Freiraum
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        CODE_SIGN_ENTITLEMENTS: Freiraum/Freiraum.entitlements
+        "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": Freiraum/Freiraum-macOS.entitlements
+        TARGETED_DEVICE_FAMILY: "1"
+        ENABLE_HARDENED_RUNTIME: YES
+    info:
+      path: Freiraum/Info.plist
+      properties:
+        CFBundleDisplayName: Freiraum
+        LSApplicationCategoryType: public.app-category.finance
+        ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen: {}
+        UIBackgroundModes: [fetch]
+        BGTaskSchedulerPermittedIdentifiers: [$(PRODUCT_BUNDLE_IDENTIFIER).refresh]
+        FreiraumDomain: $(FREIRAUM_DOMAIN)
+        FreiraumAppGroup: group.$(FREIRAUM_BUNDLE_PREFIX).freiraum
+  FreiraumWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - FreiraumWidget
+    dependencies:
+      - package: FreiraumKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(FREIRAUM_BUNDLE_PREFIX).freiraum.widget
+        PRODUCT_NAME: FreiraumWidget
+        CODE_SIGN_ENTITLEMENTS: FreiraumWidget/FreiraumWidget.entitlements
+        TARGETED_DEVICE_FAMILY: "1"
+    info:
+      path: FreiraumWidget/Info.plist
+      properties:
+        CFBundleDisplayName: Freiraum
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+        FreiraumAppGroup: group.$(FREIRAUM_BUNDLE_PREFIX).freiraum
+schemes:
+  Freiraum:
+    build:
+      targets:
+        Freiraum: all
+    run:
+      config: Debug
+    archive:
+      config: Release

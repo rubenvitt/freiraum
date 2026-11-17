@@ -82,7 +82,11 @@ export const SplitKind = z.enum(['topf', 'einnahme', 'umbuchung']).openapi({
 export const SplitSchema = z
   .object({
     kind: SplitKind,
-    potId: z.uuid().nullable().openapi({ description: 'nur bei kind = topf' }),
+    potId: z
+      .uuid()
+      .nullable()
+      .default(null)
+      .openapi({ description: 'nur bei kind = topf; fehlt = null' }),
     amountCents: Cents,
   })
   .openapi('Split')

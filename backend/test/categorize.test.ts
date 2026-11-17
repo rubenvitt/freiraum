@@ -274,6 +274,18 @@ describe('Bestätigen und korrigieren', () => {
     )
     expect(missingPot.status).toBe(422)
 
+    // Ohne potId gilt null (der Swift-Client lässt leere Felder weg).
+    const withoutPotId = await request(
+      'PUT',
+      `/v1/transactions/${t?.id}/splits`,
+      { splits: [{ kind: 'umbuchung', amountCents: -5_000 }], learn: false },
+      a.token,
+    )
+    expect(withoutPotId.status).toBe(200)
+    expect((await body(withoutPotId)).transaction.splits).toEqual([
+      { kind: 'umbuchung', potId: null, amountCents: -5_000 },
+    ])
+
     const ok = await body(
       await request(
         'PUT',
