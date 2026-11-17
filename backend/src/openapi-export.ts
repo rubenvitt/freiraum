@@ -17,6 +17,7 @@ const config: Config = {
   sessionTtlDays: 90,
   invitationTtlHours: 72,
   migrateOnStart: false,
+  llm: null,
 }
 
 // postgres.js verbindet erst bei der ersten Abfrage; hier wird keine gestellt.

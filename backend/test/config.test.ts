@@ -17,7 +17,41 @@ describe('Konfiguration', () => {
       sessionTtlDays: 90,
       invitationTtlHours: 72,
       migrateOnStart: true,
+      llm: null,
     })
+  })
+
+  it('schaltet das LLM nur mit Schlüssel ein', () => {
+    expect(loadConfig({ ...base, LLM_MODEL: 'beispiel/modell' }).llm).toBeNull()
+    expect(
+      loadConfig({ ...base, LLM_API_KEY: 'sk-test', LLM_MODEL: 'beispiel/modell' }).llm,
+    ).toEqual({
+      baseUrl: 'https://openrouter.ai/api/v1',
+      apiKey: 'sk-test',
+      model: 'beispiel/modell',
+      timeoutMs: 20_000,
+      zeroDataRetention: true,
+    })
+    const custom = loadConfig({
+      ...base,
+      LLM_API_KEY: 'sk-test',
+      LLM_MODEL: 'beispiel/modell',
+      LLM_BASE_URL: 'http://ollama.lan:11434/v1/',
+      LLM_TIMEOUT_MS: '5000',
+      LLM_ZDR: 'false',
+    }).llm
+    expect(custom).toMatchObject({
+      baseUrl: 'http://ollama.lan:11434/v1',
+      timeoutMs: 5000,
+      zeroDataRetention: false,
+    })
+    expect(() => loadConfig({ ...base, LLM_API_KEY: 'sk-test' })).toThrow('LLM_MODEL')
+    expect(() =>
+      loadConfig({ ...base, LLM_API_KEY: 'sk-test', LLM_MODEL: 'm', LLM_ZDR: 'ja' }),
+    ).toThrow('LLM_ZDR')
+    expect(() =>
+      loadConfig({ ...base, LLM_API_KEY: 'sk-test', LLM_MODEL: 'm', LLM_BASE_URL: 'kaputt' }),
+    ).toThrow('LLM_BASE_URL')
   })
 
   it('liest Listen und Zahlen', () => {
