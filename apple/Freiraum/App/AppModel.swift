@@ -25,6 +25,8 @@ final class AppModel {
     private(set) var accounts: [Account] = []
     private(set) var pots: [String: [Pot]] = [:]
     private(set) var budgets: [String: BudgetMonth] = [:]
+    /// Ausgleich je gemeinsamem Haushalt
+    private(set) var settlements: [String: Settlements] = [:]
     private(set) var pending: [Transaction] = []
     /// Soll und Ist der Einzahlungen im angezeigten Monat, je gemeinsamem Haushalt.
     private(set) var contributions: [String: Contributions] = [:]
@@ -88,6 +90,17 @@ final class AppModel {
 
     func pots(of householdId: String?) -> [Pot] {
         householdId.flatMap { pots[$0] } ?? []
+    }
+
+    /// Was beim Zuordnen einer Buchung zur Wahl steht: Töpfe ihres Haushalts, dazu beim
+    /// gemeinsamen Konto die eigenen privaten Töpfe und beim privaten die gemeinsamen.
+    func targetContext(for transaction: Transaction) -> TargetContext {
+        TargetContext(household: household(of: transaction), households: households, pots: pots, me: person)
+    }
+
+    func settlementState(for household: Household) -> SettlementState? {
+        guard household.kind == .gemeinsam, let settlements = settlements[household.id] else { return nil }
+        return SettlementState(settlements, me: person, today: GermanDates.isoDate(Date()))
     }
 
     func pendingCount(householdId: String?) -> Int {
@@ -183,6 +196,7 @@ final class AppModel {
         accounts = []
         pots = [:]
         budgets = [:]
+        settlements = [:]
         pending = []
         contributions = [:]
         contributionRules = [:]
@@ -231,6 +245,7 @@ final class AppModel {
                 selectedHouseholdId = self.households.first?.id
             }
             errorMessage = nil
+            try await loadSettlements()
             lastLoaded = Date()
             contributions = await fetchContributions(service, households: households, month: month)
             await afterLoad(notify: notify)
@@ -250,22 +265,57 @@ final class AppModel {
 
     /// Nur das Budget eines Haushalts und die offenen Buchungen neu laden (nach einer Aktion).
     func reload(householdId: String) async {
+        await reload(householdIds: [householdId])
+    }
+
+    /// Budgets mehrerer Haushalte, die offenen Buchungen und den Ausgleich neu laden. Eine Buchung
+    /// über die Haushaltsgrenze (privater Topf vom gemeinsamen Konto und umgekehrt) ändert beide.
+    func reload(householdIds: Set<String>) async {
         guard let service else { return }
+        let month = self.month
         do {
-            async let budget = service.budget(householdId: householdId, month: month)
-            async let pending = service.pendingTransactions()
-            let (b, p) = try await (budget, pending)
-            budgets[householdId] = b
-            self.pending = p
+            async let pendingCall = service.pendingTransactions()
+            let budgets = try await withThrowingTaskGroup(of: BudgetMonth.self) { group in
+                for id in householdIds {
+                    group.addTask { try await service.budget(householdId: id, month: month) }
+                }
+                var result: [BudgetMonth] = []
+                for try await item in group { result.append(item) }
+                return result
+            }
+            let pending = try await pendingCall
+            for budget in budgets { self.budgets[budget.householdId] = budget }
+            self.pending = pending
+            try await loadSettlements()
             // Eine bestätigte Einzahlung ändert das Ist.
-            if let household = households.first(where: { $0.id == householdId && $0.kind == .gemeinsam }) {
-                let fresh = await fetchContributions(service, households: [household], month: month)
+            let shared = households.filter { householdIds.contains($0.id) && $0.kind == .gemeinsam }
+            if !shared.isEmpty {
+                let fresh = await fetchContributions(service, households: shared, month: month)
                 contributions.merge(fresh, uniquingKeysWith: { _, new in new })
             }
             await afterLoad(notify: false)
         } catch {
             report(error)
         }
+    }
+
+    /// Ausgleich aller gemeinsamen Haushalte laden.
+    private func loadSettlements() async throws {
+        guard let service else { return }
+        var result: [String: Settlements] = [:]
+        for household in households where household.kind == .gemeinsam {
+            result[household.id] = try await service.settlements(householdId: household.id)
+        }
+        settlements = result
+    }
+
+    /// Haushalte, deren Budget eine Zuordnung berührt: der des Kontos und die der Töpfe.
+    private func householdIds(of transaction: Transaction, targets: [SplitTarget]) -> Set<String> {
+        var ids = Set([household(of: transaction)?.id].compactMap { $0 })
+        for case let .pot(potId) in targets {
+            if let owner = pots.first(where: { $0.value.contains { $0.id == potId } })?.key { ids.insert(owner) }
+        }
+        return ids
     }
 
     /// Soll und Ist der gemeinsamen Haushalte. Ein Fehler hier lässt das Budget stehen und
@@ -325,14 +375,14 @@ final class AppModel {
 
     /// Vorschlag übernehmen.
     func confirm(_ transaction: Transaction) async -> Bool {
-        await perform(householdOf: transaction) { service in
+        await perform(transaction, targets: transaction.suggestion.map { [$0.target] } ?? []) { service in
             _ = try await service.confirm(transactionId: transaction.id)
         }
     }
 
     /// Selbst zuordnen oder aufteilen. Eine einfache Korrektur lernt der Server als Regel.
     func assign(_ transaction: Transaction, splits: [Split]) async -> Bool {
-        await perform(householdOf: transaction) { service in
+        await perform(transaction, targets: splits.map(\.target)) { service in
             _ = try await service.setSplits(transactionId: transaction.id, splits: splits)
         }
     }
@@ -483,13 +533,16 @@ final class AppModel {
         }
     }
 
-    private func perform(householdOf transaction: Transaction, _ action: (FreiraumService) async throws -> Void) async -> Bool {
+    private func perform(
+        _ transaction: Transaction, targets: [SplitTarget], _ action: (FreiraumService) async throws -> Void
+    ) async -> Bool {
         guard let service else { return false }
         do {
             try await action(service)
+            let affected = householdIds(of: transaction, targets: targets)
             pending.removeAll { $0.id == transaction.id }
-            if let household = household(of: transaction) {
-                await reload(householdId: household.id)
+            if !affected.isEmpty {
+                await reload(householdIds: affected)
             }
             return true
         } catch {

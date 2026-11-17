@@ -144,12 +144,16 @@ public struct BudgetMonth: Hashable, Sendable, Codable {
     }
 }
 
-/// Ziel einer Aufteilung: ein Topf, „Einnahme“ (fließt in „Noch ohne Aufgabe“) oder
-/// „Umbuchung“ (zwischen eigenen Konten, ohne Wirkung aufs Budget).
+/// Ziel einer Aufteilung: ein Topf, „Einnahme“ (fließt in „Noch ohne Aufgabe“), „Umbuchung“
+/// (zwischen eigenen Konten, ohne Wirkung aufs Budget), Einzahlung ins Gemeinsame oder Ausgleich
+/// zwischen privatem und gemeinsamem Konto. Bei Einzahlung und Ausgleich nennt `personId` auf
+/// gemeinsamen Konten, von wem bzw. an wen das Geld geht; auf privaten Konten ist sie leer.
 public enum SplitTarget: Hashable, Sendable, Codable {
     case pot(String)
     case income
     case transfer
+    case contribution(personId: String?)
+    case settlement(personId: String?)
 }
 
 public struct Split: Hashable, Sendable, Codable {
@@ -163,7 +167,8 @@ public struct Split: Hashable, Sendable, Codable {
 }
 
 public struct Suggestion: Hashable, Sendable, Codable {
-    public enum Source: String, Sendable, Codable { case regel, llm }
+    /// abgleich = Überweisung zwischen eigenen Konten, über die IBAN erkannt
+    public enum Source: String, Sendable, Codable { case regel, abgleich, llm }
 
     public let source: Source
     public let target: SplitTarget
