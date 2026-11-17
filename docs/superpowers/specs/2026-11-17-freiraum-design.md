@@ -69,7 +69,7 @@ Optionen, in einem Spike (E1) zu bewerten:
 - **FinTS direkt**: ohne Drittanbieter, bankabhängig, TAN-Verfahren aufwendig.
 - **PSD2-Anbieter** (z. B. Enable Banking; GoCardless Bank Account Data: prüfen, ob noch neue Nutzer aufgenommen werden): einfacher, aber Abhängigkeit und Zustimmung alle 90–180 Tage.
 
-Kriterien: alle eigenen Banken abgedeckt, Kosten, Aufwand der regelmäßigen Zustimmung, Datenschutz.
+Kriterien: alle eigenen Banken abgedeckt, Kosten, Aufwand der regelmäßigen Zustimmung, Datenschutz. Ergebnis des Spikes: [ADR 0002](../../adr/0002-bankanbindung.md).
 
 ## Kategorisierung mit wenig Pflege
 
@@ -106,6 +106,6 @@ Das Repo ist öffentlich. Deshalb: keine echten Finanzdaten, Kontonamen oder Zug
 ## Offene Entscheidungen
 
 - ~~Backend-Sprache und Framework~~: TypeScript + Hono, siehe ADR 0001
-- Bankanbieter (nach E1-Spike)
+- Bankanbieter: Vorschlag in [ADR 0002](../../adr/0002-bankanbindung.md) (FinTS direkt, Enable Banking für Konten ohne FinTS), wartet auf die Prüfung der eigenen Banken
 - Welches LLM für Vorschläge, lokal oder per API
 - Standard-Einzahlungsregel fürs Gemeinsame

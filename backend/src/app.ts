@@ -4,8 +4,10 @@ import { AuthService } from './auth/service.js'
 import type { Config } from './config.js'
 import type { Db } from './db/client.js'
 import { ApiError } from './errors.js'
+import { LedgerService } from './ledger/service.js'
 import { authRoutes } from './routes/auth.js'
 import { healthRoutes } from './routes/health.js'
+import { ledgerRoutes } from './routes/ledger.js'
 
 export const API_VERSION = '0.1.0'
 
@@ -13,6 +15,7 @@ export type AppEnv = {
   Variables: {
     auth: AuthService
     db: Db
+    ledger: LedgerService
     session: { id: string; person: Person }
   }
 }
@@ -21,6 +24,7 @@ const errorBody = (code: string, message: string) => ({ error: { code, message }
 
 export function createApp(deps: { db: Db; config: Config }) {
   const auth = new AuthService(deps.db, deps.config)
+  const ledger = new LedgerService(deps.db)
 
   const app = new OpenAPIHono<AppEnv>({
     defaultHook: (result, c) => {
@@ -41,6 +45,7 @@ export function createApp(deps: { db: Db; config: Config }) {
   app.use(async (c, next) => {
     c.set('auth', auth)
     c.set('db', deps.db)
+    c.set('ledger', ledger)
     await next()
   })
 
@@ -63,10 +68,11 @@ export function createApp(deps: { db: Db; config: Config }) {
 
   healthRoutes(app, deps.config)
   authRoutes(app)
+  ledgerRoutes(app)
 
   app.doc31('/openapi.json', openApiInfo)
 
-  return { app, auth }
+  return { app, auth, ledger }
 }
 
 export const openApiInfo = {

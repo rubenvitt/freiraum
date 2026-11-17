@@ -12,4 +12,4 @@ Persönliches Finanz-Cockpit für Paare: Budget nach dem Topf-Prinzip, getrennte
 - `deploy/`: Compose-Datei und Anleitung fürs Homelab
 - `docs/adr/`: Architekturentscheidungen
 
-Status: E0 Grundgerüst (Backend-Skelett, Anmeldung per Passkey).
+Status: E0 Grundgerüst (Backend-Skelett, Anmeldung per Passkey) steht. E1 läuft: Haushalte, Konten, idempotenter Import, Erkennung wiederkehrender Buchungen. Die Wahl der Bankanbindung ist in [ADR 0002](docs/adr/0002-bankanbindung.md) vorgeschlagen.
