@@ -10,6 +10,8 @@ struct ConfirmView: View {
     @State private var busy = false
     @State private var changing: Transaction?
     @State private var splitting: Transaction?
+    /// „Denk an die 50 € Bargeld“ nach einer Abhebung
+    @State private var cashReminder: String?
 
     private var queue: [Transaction] {
         model.pending.filter { !skipped.contains($0.id) }
@@ -24,6 +26,9 @@ struct ConfirmView: View {
                 if let current = queue.first {
                     ScrollView {
                         VStack(spacing: 22) {
+                            if let cashReminder {
+                                CashReminder(text: cashReminder)
+                            }
                             card(for: current)
                             actions(for: current)
                             upcoming
@@ -68,12 +73,16 @@ struct ConfirmView: View {
         }
     }
 
-    private func card(for t: Transaction) -> some View {
+    private func info(for t: Transaction) -> ConfirmCard {
         let household = model.household(of: t)
-        let info = ConfirmCard(
+        return ConfirmCard(
             transaction: t, account: model.account(t.accountId), household: household,
-            pots: model.pots(of: household?.id), today: today
+            pots: model.pots(of: household?.id), accounts: model.accounts(of: household?.id), today: today
         )
+    }
+
+    private func card(for t: Transaction) -> some View {
+        let info = info(for: t)
         return GlassCard(cornerRadius: 32, padding: 22) {
             VStack(alignment: .leading, spacing: 22) {
                 VStack(alignment: .leading, spacing: 6) {
@@ -125,14 +134,31 @@ struct ConfirmView: View {
 
     private func actions(for t: Transaction) -> some View {
         let canConfirm = t.status == .vorgeschlagen && t.suggestion != nil
+        let offersCash = info(for: t).offersCash
         return VStack(spacing: 10) {
             if let message = model.errorMessage {
                 ErrorBanner(message: message)
             }
+            if offersCash {
+                Button {
+                    Task {
+                        busy = true
+                        if await model.bookAsCash(t) { remindCash(after: t) }
+                        busy = false
+                    }
+                } label: {
+                    Label("Ins Bargeld buchen", systemImage: "banknote")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.glassProminent)
+                .disabled(busy)
+                .accessibilityHint("Bucht die Abhebung als Umbuchung ins Bargeldkonto, das Budget bleibt gleich")
+            }
             Button {
                 Task {
                     busy = true
-                    _ = await model.confirm(t)
+                    if await model.confirm(t) { remindCash(after: t) }
                     busy = false
                 }
             } label: {
@@ -205,6 +231,9 @@ struct ConfirmView: View {
                 .font(.body)
                 .foregroundStyle(Theme.secondary)
                 .multilineTextAlignment(.center)
+            if let cashReminder {
+                CashReminder(text: cashReminder)
+            }
             HStack(spacing: 10) {
                 Button("Zur Übersicht") { dismiss() }
                     .buttonStyle(.glassProminent)
@@ -220,8 +249,35 @@ struct ConfirmView: View {
 
     private func apply(_ transaction: Transaction, splits: [Split]) async {
         busy = true
-        _ = await model.assign(transaction, splits: splits)
+        if await model.assign(transaction, splits: splits) { remindCash(after: transaction) }
         busy = false
+    }
+
+    /// Nach einer Abhebung an den offenen Bargeldbestand erinnern.
+    private func remindCash(after t: Transaction) {
+        guard ConfirmCard.looksLikeWithdrawal(t), let household = model.household(of: t) else { return }
+        cashReminder = CashText.reminder(model.unrecordedCash(householdId: household.id))
+    }
+}
+
+/// Hinweis „Denk an die 50 € Bargeld“ mit dem Weg zum Erfassen.
+struct CashReminder: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "banknote")
+                .foregroundStyle(Theme.warning)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(text).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                Text("Ausgaben daraus erfasst du mit dem Plus.").font(.footnote).foregroundStyle(Theme.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(Theme.warning.opacity(0.1), in: .rect(cornerRadius: 16))
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -257,7 +313,10 @@ struct TargetPicker: View {
 
     var body: some View {
         let household = model.household(of: transaction)
-        let options = TargetOption.options(pots: model.pots(of: household?.id), forIncome: transaction.amountCents > 0)
+        let options = TargetOption.options(
+            pots: model.pots(of: household?.id), forIncome: transaction.amountCents > 0,
+            cashAccounts: model.accounts(of: household?.id)
+        )
         let groups = Dictionary(grouping: options, by: \.group)
         let order = options.reduce(into: [String]()) { if !$0.contains($1.group) { $0.append($1.group) } }
         NavigationStack {
@@ -313,7 +372,10 @@ struct SplitSheet: View {
 
     var body: some View {
         let household = model.household(of: transaction)
-        let options = TargetOption.options(pots: model.pots(of: household?.id), forIncome: transaction.amountCents > 0)
+        let options = TargetOption.options(
+            pots: model.pots(of: household?.id), forIncome: transaction.amountCents > 0,
+            cashAccounts: model.accounts(of: household?.id)
+        )
         NavigationStack {
             Form {
                 Section {

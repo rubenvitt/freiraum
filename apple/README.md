@@ -46,7 +46,8 @@ für iOS und macOS ohne Signatur.
 ## Hinweise
 
 - Barausgaben landen im Bargeldkonto des Haushalts; fehlt es, legt die App beim ersten Erfassen
-  eins an. Abhebungen am Automaten als „Umbuchung“ zuordnen.
+  eins an. Abhebungen am Automaten bucht „Ins Bargeld buchen“ als Umbuchung ins Bargeldkonto;
+  die Übersicht zeigt dann, wie viel davon noch nicht als Ausgabe erfasst ist.
 - „Buchungen warten“ meldet die App selbst per Hintergrundabruf (etwa stündlich, iOS entscheidet).
   Im Simulator lässt sich der Abruf in Xcode über *Debug › Simulate Background Fetch* auslösen.
 - Das Widget zeigt den privaten Haushalt im laufenden Monat und liest nur, was die App zuletzt

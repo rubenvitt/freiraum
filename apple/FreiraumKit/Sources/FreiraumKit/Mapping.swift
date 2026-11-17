@@ -20,7 +20,10 @@ extension Household {
 extension Account {
     init(_ a: Components.Schemas.Account) throws {
         guard let source = Source(rawValue: a.source.rawValue) else { throw MappingError(description: "Kontoquelle \(a.source.rawValue)") }
-        self.init(id: a.id, householdId: a.householdId, name: a.name, source: source)
+        self.init(
+            id: a.id, householdId: a.householdId, name: a.name, source: source,
+            unrecordedCashCents: a.unrecordedCashCents
+        )
     }
 }
 
@@ -62,20 +65,21 @@ extension BudgetMonth {
 }
 
 extension SplitTarget {
-    init(kind: String, potId: String?) throws {
-        switch (kind, potId) {
-        case ("topf", let id?): self = .pot(id)
-        case ("einnahme", _): self = .income
-        case ("umbuchung", _): self = .transfer
+    init(kind: String, potId: String?, counterAccountId: String? = nil) throws {
+        switch (kind, potId, counterAccountId) {
+        case ("topf", let id?, _): self = .pot(id)
+        case ("einnahme", _, _): self = .income
+        case ("umbuchung", _, let account?): self = .transferTo(account)
+        case ("umbuchung", _, nil): self = .transfer
         default: throw MappingError(description: "Aufteilung \(kind)")
         }
     }
 
-    var apiKind: Components.Schemas.Split.KindPayload {
+    var apiKind: Components.Schemas.SplitInput.KindPayload {
         switch self {
         case .pot: .topf
         case .income: .einnahme
-        case .transfer: .umbuchung
+        case .transfer, .transferTo: .umbuchung
         }
     }
 
@@ -83,11 +87,19 @@ extension SplitTarget {
         if case let .pot(id) = self { return id }
         return nil
     }
+
+    var counterAccountId: String? {
+        if case let .transferTo(id) = self { return id }
+        return nil
+    }
 }
 
 extension Split {
-    var api: Components.Schemas.Split {
-        .init(kind: target.apiKind, potId: target.potId, amountCents: amountCents)
+    var api: Components.Schemas.SplitInput {
+        .init(
+            kind: target.apiKind, potId: target.potId, personId: nil,
+            counterAccountId: target.counterAccountId, amountCents: amountCents
+        )
     }
 }
 
@@ -97,11 +109,17 @@ extension Transaction {
         self.init(
             id: t.id, accountId: t.accountId, bookingDate: t.bookingDate, amountCents: t.amountCents,
             counterpartyName: t.counterpartyName, purpose: t.purpose, status: status,
-            splits: try t.splits.map { Split(target: try SplitTarget(kind: $0.kind.rawValue, potId: $0.potId), amountCents: $0.amountCents) },
+            splits: try t.splits.map {
+                Split(
+                    target: try SplitTarget(kind: $0.kind.rawValue, potId: $0.potId, counterAccountId: $0.counterAccountId),
+                    amountCents: $0.amountCents
+                )
+            },
             suggestion: try t.suggestion.map { s in
                 guard let source = Suggestion.Source(rawValue: s.source.rawValue) else { throw MappingError(description: "Quelle \(s.source.rawValue)") }
                 return Suggestion(
-                    source: source, target: try SplitTarget(kind: s.kind.rawValue, potId: s.potId),
+                    source: source,
+                    target: try SplitTarget(kind: s.kind.rawValue, potId: s.potId, counterAccountId: s.counterAccountId),
                     confidencePct: s.confidencePct, reason: s.reason
                 )
             }

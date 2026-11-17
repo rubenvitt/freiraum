@@ -94,8 +94,19 @@ final class AppModel {
         guard let budget = budgets[household.id] else { return nil }
         return OverviewState(
             budget: budget, household: household, pots: pots[household.id] ?? [],
-            pendingCount: pendingCount(householdId: household.id)
+            pendingCount: pendingCount(householdId: household.id),
+            unrecordedCashCents: unrecordedCash(householdId: household.id)
         )
+    }
+
+    /// Konten eines Haushalts.
+    func accounts(of householdId: String?) -> [Account] {
+        accounts.filter { $0.householdId == householdId }
+    }
+
+    /// Abgehobenes Bargeld eines Haushalts, für das noch keine Ausgaben erfasst sind.
+    func unrecordedCash(householdId: String) -> Int {
+        CashText.unrecordedCents(accounts: accounts, householdId: householdId)
     }
 
     // MARK: Anmelden und Abmelden
@@ -228,15 +239,18 @@ final class AppModel {
         await load()
     }
 
-    /// Nur das Budget eines Haushalts und die offenen Buchungen neu laden (nach einer Aktion).
+    /// Budget eines Haushalts, Konten (Bargeldbestand) und offene Buchungen neu laden (nach einer
+    /// Aktion).
     func reload(householdId: String) async {
         guard let service else { return }
         do {
             async let budget = service.budget(householdId: householdId, month: month)
             async let pending = service.pendingTransactions()
-            let (b, p) = try await (budget, pending)
+            async let accounts = service.accounts()
+            let (b, p, a) = try await (budget, pending, accounts)
             budgets[householdId] = b
             self.pending = p
+            self.accounts = a
             await afterLoad(notify: false)
         } catch {
             report(error)
@@ -296,17 +310,38 @@ final class AppModel {
         }
     }
 
+    /// Abhebung als Umbuchung ins Bargeldkonto des Haushalts buchen (legt es bei Bedarf an).
+    /// Das Budget ändert sich dadurch nicht; erst erfasste Barausgaben belasten Töpfe.
+    func bookAsCash(_ transaction: Transaction) async -> Bool {
+        guard let service, let household = household(of: transaction) else { return false }
+        do {
+            let cash = try await cashAccount(householdId: household.id, service: service)
+            let split = Split(target: .transferTo(cash.id), amountCents: transaction.amountCents)
+            _ = try await service.setSplits(transactionId: transaction.id, splits: [split])
+            pending.removeAll { $0.id == transaction.id }
+            await reload(householdId: household.id)
+            return true
+        } catch {
+            report(error)
+            return false
+        }
+    }
+
+    /// Bargeldkonto des Haushalts; beim ersten Mal wird eins angelegt („Bargeld“).
+    private func cashAccount(householdId: String, service: FreiraumService) async throws -> Account {
+        if let cash = accounts.first(where: { $0.householdId == householdId && $0.source == .bar }) {
+            return cash
+        }
+        let created = try await service.createCashAccount(householdId: householdId)
+        accounts.append(created)
+        return created
+    }
+
     /// Barausgabe erfassen; legt beim ersten Mal ein Bargeldkonto im Haushalt an.
     func recordCash(_ expense: CashExpense, householdId: String) async -> Bool {
         guard let service else { return false }
         do {
-            var cash = accounts.first { $0.householdId == householdId && $0.source == .bar }
-            if cash == nil {
-                let created = try await service.createCashAccount(householdId: householdId)
-                accounts.append(created)
-                cash = created
-            }
-            guard let cash else { return false }
+            let cash = try await cashAccount(householdId: householdId, service: service)
             _ = try await service.recordCashExpense(accountId: cash.id, expense: expense)
             await reload(householdId: householdId)
             return true

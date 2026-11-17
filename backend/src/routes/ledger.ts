@@ -119,15 +119,21 @@ export const SplitSchema = z
   })
   .openapi('Split')
 
-export const SplitInputSchema = SplitSchema.extend({
-  potId: z
-    .uuid()
-    .nullable()
-    .default(null)
-    .openapi({ description: 'nur bei kind = topf; fehlt = null' }),
-  personId: SplitPersonId.default(null),
-  counterAccountId: CounterAccountId.default(null),
-}).openapi('SplitInput')
+// Eigenständiges Objekt statt `SplitSchema.extend`: Das würde im Vertrag ein `allOf`, und der
+// Swift-Client bekäme statt eines einfachen Typs eine Verschachtelung (ADR 0004).
+export const SplitInputSchema = z
+  .object({
+    kind: SplitKind,
+    potId: z
+      .uuid()
+      .nullable()
+      .default(null)
+      .openapi({ description: 'nur bei kind = topf; fehlt = null' }),
+    personId: SplitPersonId.default(null),
+    counterAccountId: CounterAccountId.default(null),
+    amountCents: Cents,
+  })
+  .openapi('SplitInput')
 
 export const SuggestionSchema = z
   .object({

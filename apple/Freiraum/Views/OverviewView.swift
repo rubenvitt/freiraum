@@ -7,6 +7,7 @@ struct OverviewView: View {
     @State private var showConfirm = false
     @State private var showDistribute = false
     @State private var showSettings = false
+    @State private var showCash = false
 
     var body: some View {
         NavigationStack {
@@ -44,6 +45,7 @@ struct OverviewView: View {
         .sheet(isPresented: $showConfirm) { ConfirmView() }
         .sheet(isPresented: $showDistribute) { DistributeView() }
         .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(isPresented: $showCash) { CashExpenseView() }
     }
 
     private var header: some View {
@@ -72,6 +74,17 @@ struct OverviewView: View {
             }
             .buttonStyle(.plain)
             .accessibilityHint("Öffnet „Buchungen bestätigen“")
+        }
+
+        if let cashHint = state.cashHint {
+            Button { showCash = true } label: {
+                PendingCard(
+                    title: cashHint, subtitle: "Ausgaben daraus mit dem Plus erfassen",
+                    systemImage: "banknote", color: Theme.warning
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Öffnet „Barausgabe erfassen“")
         }
 
         if !state.erstIch.isEmpty {
@@ -202,15 +215,17 @@ struct ReadyToAssignHero: View {
 struct PendingCard: View {
     let title: String
     let subtitle: String
+    var systemImage = "checklist"
+    var color = Theme.accent
 
     var body: some View {
         GlassCard {
             HStack(spacing: 14) {
-                Image(systemName: "checklist")
+                Image(systemName: systemImage)
                     .font(.title3)
-                    .foregroundStyle(Theme.accent)
+                    .foregroundStyle(color)
                     .frame(width: 44, height: 44)
-                    .background(Theme.accent.opacity(0.14), in: .rect(cornerRadius: 14))
+                    .background(color.opacity(0.14), in: .rect(cornerRadius: 14))
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title).font(.headline).foregroundStyle(Theme.text)

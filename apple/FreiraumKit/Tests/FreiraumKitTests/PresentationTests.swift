@@ -79,6 +79,24 @@ private let november = YearMonth(year: 2026, month: 11)
         #expect(state.pots.isEmpty)
     }
 
+    @Test func bargeldNochNichtErfasst() {
+        // 50 € abgehoben, 20 € als Barausgabe erfasst: Der Server liefert 30 € Bestand.
+        let accounts = [
+            Account(id: "a1", householdId: "h1", name: "Giro", source: .bank),
+            Account(id: "c1", householdId: "h1", name: "Bargeld", source: .bar, unrecordedCashCents: 3_000),
+            Account(id: "c2", householdId: "h2", name: "Bargeld", source: .bar, unrecordedCashCents: 1_000),
+        ]
+        let cents = CashText.unrecordedCents(accounts: accounts, householdId: "h1")
+        #expect(cents == 3_000)
+        let state = OverviewState(budget: budget([]), household: ich, pots: pots, pendingCount: 0, unrecordedCashCents: cents)
+        #expect(state.cashHint == "30\u{00A0}€ Bargeld noch nicht erfasst")
+        #expect(OverviewState(budget: budget([]), household: ich, pots: pots, pendingCount: 0).cashHint == nil)
+        #expect(CashText.unrecorded(0) == nil)
+        #expect(CashText.unrecorded(-500) == nil)
+        #expect(CashText.reminder(5_000) == "Denk an die 50\u{00A0}€ Bargeld")
+        #expect(CashText.reminder(0) == nil)
+    }
+
     @Test func texteZuWartendenBuchungen() {
         #expect(PendingText.title(0) == nil)
         #expect(PendingText.title(1) == "1 Buchung wartet")
@@ -122,7 +140,37 @@ private let november = YearMonth(year: 2026, month: 11)
         #expect(card.suggestion == nil)
         #expect(!card.canConfirm)
         #expect(card.note != nil)
+        #expect(card.isWithdrawal)
+        #expect(card.offersCash)
         #expect(card.household == "Ich")
+    }
+
+    @Test func abhebungInsBargeld() {
+        let cash = Account(id: "c1", householdId: "h1", name: "Bargeld", source: .bar, unrecordedCashCents: 0)
+        let giro = Account(id: "a1", householdId: "h1", name: "Giro", source: .bank)
+        let suggested = Transaction(
+            id: "t4", accountId: "a1", bookingDate: "2026-11-13", amountCents: -5_000,
+            counterpartyName: "Geldautomat Beispielbank", purpose: nil, status: .vorgeschlagen,
+            suggestion: Suggestion(source: .regel, target: .transferTo("c1"), confidencePct: 100, reason: "Regel")
+        )
+        let card = ConfirmCard(transaction: suggested, account: giro, household: ich, pots: pots, accounts: [giro, cash])
+        #expect(card.suggestion == "Ins Bargeld")
+        #expect(card.isWithdrawal)
+        #expect(!card.offersCash)
+        #expect(card.note == "Zählt als Bargeld, bis du Ausgaben mit dem Plus erfasst.")
+        #expect(ConfirmCard.label(.transferTo("a1"), pots: [], accounts: [giro]) == "Umbuchung → Giro")
+        #expect(ConfirmCard.label(.transferTo("x"), pots: []) == "Umbuchung")
+
+        // Ausgänge bieten „Ins Bargeld“ an, Eingänge nicht.
+        let out = TargetOption.options(pots: pots, forIncome: false, cashAccounts: [cash, giro])
+        #expect(out.contains { $0.target == .transferTo("c1") && $0.label == "Ins Bargeld" })
+        #expect(!out.contains { $0.target == .transferTo("a1") })
+        let incoming = TargetOption.options(pots: pots, forIncome: true, cashAccounts: [cash])
+        #expect(!incoming.contains { $0.target == .transferTo("c1") })
+
+        let groceries = Transaction(id: "t5", accountId: "a1", bookingDate: "2026-11-13", amountCents: -2_000,
+                                    counterpartyName: "Supermarkt Beispiel", status: .importiert)
+        #expect(!ConfirmCard.looksLikeWithdrawal(groceries))
     }
 
     @Test func eingangMitPlus() {

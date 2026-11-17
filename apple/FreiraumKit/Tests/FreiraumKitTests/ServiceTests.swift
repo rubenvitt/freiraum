@@ -42,7 +42,8 @@ final class FakeTransport: ClientTransport, @unchecked Sendable {
 private let transactionJSON = """
 {"id":"t1","accountId":"a1","sourceId":null,"bookingDate":"2026-11-03","valueDate":null,"amountCents":-450,
  "currency":"EUR","counterpartyName":"Bäcker","counterpartyIban":null,"purpose":null,"status":"bestaetigt",
- "recurringSeriesId":null,"splits":[{"kind":"topf","potId":"p1","amountCents":-450}],"suggestion":null}
+ "recurringSeriesId":null,"splits":[{"kind":"topf","potId":"p1","personId":null,"counterAccountId":null,"amountCents":-450}],
+ "suggestion":null}
 """
 
 @Suite struct ServiceTests {
@@ -98,6 +99,45 @@ private let transactionJSON = """
         #expect(splits.first?["kind"] as? String == "umbuchung")
         #expect(splits.first?["potId"] == nil)
         #expect(body["learn"] as? Bool == false)
+    }
+
+    @Test func abhebungInsBargeldMitGegenkonto() async throws {
+        let withdrawal = """
+        {"id":"t2","accountId":"a1","sourceId":null,"bookingDate":"2026-11-02","valueDate":null,"amountCents":-5000,
+         "currency":"EUR","counterpartyName":"Geldautomat","counterpartyIban":null,"purpose":null,"status":"bestaetigt",
+         "recurringSeriesId":null,
+         "splits":[{"kind":"umbuchung","potId":null,"personId":null,"counterAccountId":"c1","amountCents":-5000}],
+         "suggestion":{"source":"abgleich","kind":"umbuchung","potId":null,"personId":null,"counterAccountId":"c1",
+          "confidencePct":100,"reason":"Abgleich","ruleId":null}}
+        """
+        let transport = FakeTransport { _ in
+            (200, "{\"transaction\":\(withdrawal),\"rule\":null,\"resuggested\":0}")
+        }
+        let t = try await service(transport).setSplits(
+            transactionId: "t2", splits: [Split(target: .transferTo("c1"), amountCents: -5_000)]
+        )
+        #expect(t.splits == [Split(target: .transferTo("c1"), amountCents: -5_000)])
+        #expect(t.suggestion?.source == .abgleich)
+        #expect(t.suggestion?.target == .transferTo("c1"))
+        let body = try #require(transport.requests.first?.body)
+        let splits = try #require(body["splits"] as? [[String: Any]])
+        #expect(splits.first?["kind"] as? String == "umbuchung")
+        #expect(splits.first?["counterAccountId"] as? String == "c1")
+    }
+
+    @Test func kontenMitBargeldbestand() async throws {
+        let transport = FakeTransport { _ in
+            (200, """
+            {"items":[
+             {"id":"a1","householdId":"h1","name":"Giro","source":"bank","iban":null,"currency":"EUR",
+              "createdAt":"2026-11-01T10:00:00.000Z","lastImportAt":null,"balance":null,"unrecordedCashCents":null},
+             {"id":"c1","householdId":"h1","name":"Bargeld","source":"bar","iban":null,"currency":"EUR",
+              "createdAt":"2026-11-01T10:00:00.000Z","lastImportAt":null,"balance":null,"unrecordedCashCents":3000}]}
+            """)
+        }
+        let accounts = try await service(transport).accounts()
+        #expect(accounts.map(\.unrecordedCashCents) == [nil, 3_000])
+        #expect(CashText.unrecordedCents(accounts: accounts, householdId: "h1") == 3_000)
     }
 
     @Test func fehlermeldungDesServers() async {
