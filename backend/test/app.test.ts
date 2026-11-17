@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { afterAll, describe, expect, it } from 'vitest'
 import { stringify } from 'yaml'
 import { openApiInfo } from '../src/app.js'
@@ -83,5 +83,16 @@ describe('OpenAPI-Vertrag', () => {
     const committed = await readFile(new URL('../../openapi/openapi.yaml', import.meta.url), 'utf8')
     const generated = stringify(app.getOpenAPI31Document(openApiInfo), { lineWidth: 0 })
     expect(committed.slice(committed.indexOf('\n') + 1)).toBe(generated)
+  })
+
+  it('vergibt jeden Schemanamen nur einmal (sonst überschreibt einer still den anderen)', async () => {
+    const dir = new URL('../src/routes/', import.meta.url)
+    const names: string[] = []
+    for (const file of await readdir(dir)) {
+      const source = await readFile(new URL(file, dir), 'utf8')
+      for (const m of source.matchAll(/\.openapi\('([A-Za-z0-9]+)'\)/g)) names.push(m[1] as string)
+    }
+    expect(names.length).toBeGreaterThan(0)
+    expect(names.filter((n, i) => names.indexOf(n) !== i)).toEqual([])
   })
 })

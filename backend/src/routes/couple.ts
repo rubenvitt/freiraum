@@ -73,7 +73,7 @@ const MetricsSchema = z
     ruecklagen: PotProgressSchema.nullable(),
     sparquote: SavingsRateSchema.nullable(),
   })
-  .openapi('Metrics')
+  .openapi('PersonMetrics')
 
 const ContributionRuleSchema = z
   .object({

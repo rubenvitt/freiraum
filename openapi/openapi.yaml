@@ -1140,7 +1140,7 @@ components:
               description: privater Haushalt der freigebenden Person
           required:
             - householdId
-    Metrics:
+    PersonMetrics:
       type: object
       properties:
         personId:
@@ -1398,6 +1398,176 @@ components:
         - balances
         - openItems
         - manual
+    Metrics:
+      type: object
+      properties:
+        householdId:
+          type: string
+          format: uuid
+        from:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        to:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        months:
+          type: array
+          items:
+            $ref: "#/components/schemas/MonthMetrics"
+        totals:
+          $ref: "#/components/schemas/MetricsTotals"
+        runway:
+          $ref: "#/components/schemas/Runway"
+      required:
+        - householdId
+        - from
+        - to
+        - months
+        - totals
+        - runway
+    MonthMetrics:
+      type: object
+      properties:
+        month:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        incomeCents:
+          type: integer
+          description: "Einkommen: Einnahme-Aufteilungen; im gemeinsamen Haushalt auch die Einzahlungen der Personen"
+        consumptionCents:
+          type: integer
+          description: "Konsum (positiv = ausgegeben): Töpfe außer Erst-ich, abzüglich Erstattungen, plus nicht zugeordnete Ausgänge"
+        erstIchCents:
+          type: integer
+          description: Ausgaben aus Erst-ich-Töpfen (Sparen, kein Konsum)
+        contributionsCents:
+          type: integer
+          description: "Einzahlungen ins Gemeinsame vom privaten Konto (positiv = abgeflossen): kein Konsum, aber auch nicht gespart"
+        savedCents:
+          type: integer
+          description: Einkommen − Konsum − Einzahlungen
+        savingsRateBp:
+          type:
+            - integer
+            - "null"
+          description: "Sparquote: Gespart ÷ Einkommen, in Basispunkten"
+        fixedCostsCents:
+          type: integer
+          description: Konsum aus wiederkehrenden Ausgängen (Miete, Versicherungen, Abos)
+        fixedCostShareBp:
+          type:
+            - integer
+            - "null"
+          description: Fixkosten ÷ Einkommen, in Basispunkten
+        uncategorizedOutCents:
+          type: integer
+          description: nicht zugeordnete Ausgänge
+        uncategorizedInCents:
+          type: integer
+          description: nicht zugeordnete Eingänge (zählen nicht als Einkommen)
+        ageOfMoneyDays:
+          type:
+            - integer
+            - "null"
+          description: "Alter des Geldes am Monatsende (bzw. heute): Durchschnitt der letzten 10 Ausgänge, wie lange das ausgegebene Geld schon da war (älteste Eingänge zuerst verbraucht)"
+      required:
+        - month
+        - incomeCents
+        - consumptionCents
+        - erstIchCents
+        - contributionsCents
+        - savedCents
+        - savingsRateBp
+        - fixedCostsCents
+        - fixedCostShareBp
+        - uncategorizedOutCents
+        - uncategorizedInCents
+        - ageOfMoneyDays
+    MetricsTotals:
+      type: object
+      properties:
+        incomeCents:
+          type: integer
+          description: "Einkommen: Einnahme-Aufteilungen; im gemeinsamen Haushalt auch die Einzahlungen der Personen"
+        consumptionCents:
+          type: integer
+          description: "Konsum (positiv = ausgegeben): Töpfe außer Erst-ich, abzüglich Erstattungen, plus nicht zugeordnete Ausgänge"
+        erstIchCents:
+          type: integer
+          description: Ausgaben aus Erst-ich-Töpfen (Sparen, kein Konsum)
+        contributionsCents:
+          type: integer
+          description: "Einzahlungen ins Gemeinsame vom privaten Konto (positiv = abgeflossen): kein Konsum, aber auch nicht gespart"
+        savedCents:
+          type: integer
+          description: Einkommen − Konsum − Einzahlungen
+        savingsRateBp:
+          type:
+            - integer
+            - "null"
+          description: "Sparquote: Gespart ÷ Einkommen, in Basispunkten"
+        fixedCostsCents:
+          type: integer
+          description: Konsum aus wiederkehrenden Ausgängen (Miete, Versicherungen, Abos)
+        fixedCostShareBp:
+          type:
+            - integer
+            - "null"
+          description: Fixkosten ÷ Einkommen, in Basispunkten
+        uncategorizedOutCents:
+          type: integer
+          description: nicht zugeordnete Ausgänge
+        uncategorizedInCents:
+          type: integer
+          description: nicht zugeordnete Eingänge (zählen nicht als Einkommen)
+      required:
+        - incomeCents
+        - consumptionCents
+        - erstIchCents
+        - contributionsCents
+        - savedCents
+        - savingsRateBp
+        - fixedCostsCents
+        - fixedCostShareBp
+        - uncategorizedOutCents
+        - uncategorizedInCents
+    Runway:
+      type: object
+      properties:
+        cashCents:
+          type: integer
+          description: "Geld des Haushalts heute: Noch ohne Aufgabe + alle Töpfe + nicht zugeordnete Buchungen"
+        averageMonthlyConsumptionCents:
+          type:
+            - integer
+            - "null"
+        fixedContributionsCents:
+          type: integer
+          description: Feste Einzahlungen ins Gemeinsame, die jetzt gelten (nur privat; Prozent vom Netto zählt nicht)
+        monthlyOutflowCents:
+          type:
+            - integer
+            - "null"
+          description: Konsum im Schnitt + feste Einzahlungen; null ohne Historie
+        basedOnMonths:
+          type: integer
+          description: abgeschlossene Monate im Schnitt (höchstens 6)
+        months:
+          type:
+            - number
+            - "null"
+          description: Monate ohne Einkommen bei diesem Abfluss, eine Nachkommastelle
+          example: 7.4
+      required:
+        - cashCents
+        - averageMonthlyConsumptionCents
+        - fixedContributionsCents
+        - monthlyOutflowCents
+        - basedOnMonths
+        - months
     Flow:
       type: object
       properties:
@@ -3495,7 +3665,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Metrics"
+                $ref: "#/components/schemas/PersonMetrics"
         "400":
           description: Ungültige Anfrage
           content:
