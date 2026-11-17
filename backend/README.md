@@ -85,3 +85,23 @@ Rechenregeln und Begründungen: [ADR 0003](../docs/adr/0003-budget-kern.md).
   `PUT /v1/transactions/{id}/splits` korrigiert oder teilt auf. Eine Korrektur wird zur Regel
   (`/v1/households/{id}/rules`) und schlägt offene Buchungen neu vor.
 - Ein LLM ist noch nicht angebunden (`src/categorize/llm.ts` ist die Schnittstelle).
+
+## Paar-Modell (E4)
+
+Rechenregeln und Begründungen: [ADR 0004](../docs/adr/0004-paar-modell.md).
+
+- **Einzahlung und Ausgleich** sind eigene Arten der Aufteilung. `einzahlung` geht vom privaten aufs
+  gemeinsame Konto (privat mindert sie „Noch ohne Aufgabe“, gemeinsam zählt sie als Einnahme),
+  `ausgleich` ist die Erstattung zurück und wirkt nicht aufs Budget. Auf gemeinsamen Konten nennt
+  `personId`, von wem bzw. an wen.
+- **Abgleich:** Überweisungen zwischen eigenen Konten (IBAN) erkennt der Server selbst, nach den
+  Regeln und vor dem LLM (Quelle `abgleich`).
+- **Einzahlungsregeln** (`/v1/households/{id}/contribution-rules/{JJJJ-MM}`): je Person die eigene,
+  `fest` oder `prozent` vom Netto, gültig ab dem Monat. Soll und Ist:
+  `GET /v1/households/{id}/contributions/{JJJJ-MM}`.
+- **Ausgleich:** Private Konten dürfen Töpfe des gemeinsamen Haushalts verwenden. Was das Gemeinsame
+  jeder Person schuldet, zeigt `GET /v1/households/{id}/settlements`; von Hand verbucht wird per
+  `POST` (nur die eigene Forderung).
+- **Freigaben** (`/v1/shares/{personId}/{scope}`): `erst_ich`, `ruecklagen`, `einzahlung_soll`,
+  `budget`. Kennzahlen (`GET /v1/persons/{id}/metrics/{JJJJ-MM}`) sind Anteile, keine Beträge;
+  `budget` öffnet nur das Lesen von Budget und Töpfen.

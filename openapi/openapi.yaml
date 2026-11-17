@@ -530,13 +530,21 @@ components:
             - topf
             - einnahme
             - umbuchung
-          description: topf = Ausgabe oder Erstattung eines Topfs; einnahme = fließt in „Noch ohne Aufgabe“; umbuchung = zwischen eigenen Konten desselben Haushalts, ohne Wirkung aufs Budget
+            - einzahlung
+            - ausgleich
+          description: topf = Ausgabe oder Erstattung eines Topfs (von privaten Konten auch ein Topf des gemeinsamen Haushalts, daraus entsteht ein Ausgleich); einnahme = fließt in „Noch ohne Aufgabe“; umbuchung = zwischen eigenen Konten desselben Haushalts, ohne Wirkung aufs Budget; einzahlung = vom privaten aufs gemeinsame Konto (privat ein Ausgang, gemeinsam ein Eingang); ausgleich = Erstattung einer privat bezahlten gemeinsamen Ausgabe (gemeinsam ein Ausgang, privat ein Eingang), ohne Wirkung aufs Budget
         potId:
           type:
             - string
             - "null"
           format: uuid
           description: nur bei kind = topf
+        personId:
+          type:
+            - string
+            - "null"
+          format: uuid
+          description: "nur bei einzahlung und ausgleich auf gemeinsamen Konten: von wem bzw. an wen das Geld geht"
         amountCents:
           type: integer
           minimum: -100000000000
@@ -546,6 +554,7 @@ components:
       required:
         - kind
         - potId
+        - personId
         - amountCents
     Suggestion:
       type:
@@ -556,15 +565,24 @@ components:
           type: string
           enum:
             - regel
+            - abgleich
             - llm
+          description: abgleich = Überweisung zwischen eigenen Konten, über die IBAN erkannt
         kind:
           type: string
           enum:
             - topf
             - einnahme
             - umbuchung
-          description: topf = Ausgabe oder Erstattung eines Topfs; einnahme = fließt in „Noch ohne Aufgabe“; umbuchung = zwischen eigenen Konten desselben Haushalts, ohne Wirkung aufs Budget
+            - einzahlung
+            - ausgleich
+          description: topf = Ausgabe oder Erstattung eines Topfs (von privaten Konten auch ein Topf des gemeinsamen Haushalts, daraus entsteht ein Ausgleich); einnahme = fließt in „Noch ohne Aufgabe“; umbuchung = zwischen eigenen Konten desselben Haushalts, ohne Wirkung aufs Budget; einzahlung = vom privaten aufs gemeinsame Konto (privat ein Ausgang, gemeinsam ein Eingang); ausgleich = Erstattung einer privat bezahlten gemeinsamen Ausgabe (gemeinsam ein Ausgang, privat ein Eingang), ohne Wirkung aufs Budget
         potId:
+          type:
+            - string
+            - "null"
+          format: uuid
+        personId:
           type:
             - string
             - "null"
@@ -585,6 +603,7 @@ components:
         - source
         - kind
         - potId
+        - personId
         - confidencePct
         - reason
         - ruleId
@@ -727,10 +746,13 @@ components:
           format: date-time
         readyToAssignCents:
           type: integer
-          description: "„Noch ohne Aufgabe“: Einnahmen bis zum Monat − alle Zuweisungen (auch spätere Monate) − Überziehung der Vormonate"
+          description: "„Noch ohne Aufgabe“: Einnahmen bis zum Monat − Einzahlungen ins Gemeinsame − alle Zuweisungen (auch spätere Monate) − Überziehung der Vormonate"
         inflowsCents:
           type: integer
-          description: Einnahmen im Monat
+          description: Einnahmen im Monat; im gemeinsamen Haushalt samt Einzahlungen der Personen
+        contributionsCents:
+          type: integer
+          description: Einzahlungen ins Gemeinsame im Monat (negativ, nur privat); mindern „Noch ohne Aufgabe“
         assignedCents:
           type: integer
         activityCents:
@@ -752,6 +774,7 @@ components:
         - closedAt
         - readyToAssignCents
         - inflowsCents
+        - contributionsCents
         - assignedCents
         - activityCents
         - overspentPreviousCents
@@ -869,8 +892,15 @@ components:
             - topf
             - einnahme
             - umbuchung
-          description: topf = Ausgabe oder Erstattung eines Topfs; einnahme = fließt in „Noch ohne Aufgabe“; umbuchung = zwischen eigenen Konten desselben Haushalts, ohne Wirkung aufs Budget
+            - einzahlung
+            - ausgleich
+          description: topf = Ausgabe oder Erstattung eines Topfs (von privaten Konten auch ein Topf des gemeinsamen Haushalts, daraus entsteht ein Ausgleich); einnahme = fließt in „Noch ohne Aufgabe“; umbuchung = zwischen eigenen Konten desselben Haushalts, ohne Wirkung aufs Budget; einzahlung = vom privaten aufs gemeinsame Konto (privat ein Ausgang, gemeinsam ein Eingang); ausgleich = Erstattung einer privat bezahlten gemeinsamen Ausgabe (gemeinsam ein Ausgang, privat ein Eingang), ohne Wirkung aufs Budget
         potId:
+          type:
+            - string
+            - "null"
+          format: uuid
+        personId:
           type:
             - string
             - "null"
@@ -898,10 +928,30 @@ components:
         - maxAmountCents
         - kind
         - potId
+        - personId
         - origin
         - createdAt
         - updatedAt
       description: aus der Korrektur entstandene Regel
+    SplitInput:
+      allOf:
+        - $ref: "#/components/schemas/Split"
+        - type: object
+          properties:
+            potId:
+              type:
+                - string
+                - "null"
+              format: uuid
+              default: null
+              description: nur bei kind = topf
+            personId:
+              type:
+                - string
+                - "null"
+              format: uuid
+              default: null
+              description: "nur bei einzahlung und ausgleich auf gemeinsamen Konten: von wem bzw. an wen das Geld geht"
     RuleInput:
       type: object
       properties:
@@ -942,15 +992,301 @@ components:
             - topf
             - einnahme
             - umbuchung
-          description: topf = Ausgabe oder Erstattung eines Topfs; einnahme = fließt in „Noch ohne Aufgabe“; umbuchung = zwischen eigenen Konten desselben Haushalts, ohne Wirkung aufs Budget
+            - einzahlung
+            - ausgleich
+          description: topf = Ausgabe oder Erstattung eines Topfs (von privaten Konten auch ein Topf des gemeinsamen Haushalts, daraus entsteht ein Ausgleich); einnahme = fließt in „Noch ohne Aufgabe“; umbuchung = zwischen eigenen Konten desselben Haushalts, ohne Wirkung aufs Budget; einzahlung = vom privaten aufs gemeinsame Konto (privat ein Ausgang, gemeinsam ein Eingang); ausgleich = Erstattung einer privat bezahlten gemeinsamen Ausgabe (gemeinsam ein Ausgang, privat ein Eingang), ohne Wirkung aufs Budget
         potId:
           type:
             - string
             - "null"
           format: uuid
           default: null
+        personId:
+          type:
+            - string
+            - "null"
+          format: uuid
+          default: null
+          description: nur bei einzahlung und ausgleich im gemeinsamen Haushalt; die Richtung ergibt sich dann aus der Art
       required:
         - kind
+    Share:
+      type: object
+      properties:
+        personId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        scope:
+          type: string
+          enum:
+            - erst_ich
+            - ruecklagen
+            - einzahlung_soll
+            - budget
+          description: erst_ich = ob die Erst-ich-Töpfe des Monats gefüllt sind (Anteil, kein Betrag); ruecklagen = ob die Rücklagen ihre Monatsrate haben (Anteil); einzahlung_soll = Soll der eigenen Einzahlungsregel „Prozent vom Netto“ (verrät sonst das Einkommen); budget = Budget und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern)
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - personId
+        - displayName
+        - scope
+        - createdAt
+    ReceivedShare:
+      allOf:
+        - $ref: "#/components/schemas/Share"
+        - type: object
+          properties:
+            householdId:
+              type: string
+              format: uuid
+              description: privater Haushalt der freigebenden Person
+          required:
+            - householdId
+    Metrics:
+      type: object
+      properties:
+        personId:
+          type: string
+          format: uuid
+        month:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        scopes:
+          type: array
+          items:
+            type: string
+            enum:
+              - erst_ich
+              - ruecklagen
+              - einzahlung_soll
+              - budget
+            description: erst_ich = ob die Erst-ich-Töpfe des Monats gefüllt sind (Anteil, kein Betrag); ruecklagen = ob die Rücklagen ihre Monatsrate haben (Anteil); einzahlung_soll = Soll der eigenen Einzahlungsregel „Prozent vom Netto“ (verrät sonst das Einkommen); budget = Budget und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern)
+          description: sichtbare Kennzahlen
+        erstIch:
+          $ref: "#/components/schemas/PotProgress"
+        ruecklagen:
+          $ref: "#/components/schemas/PotProgress"
+      required:
+        - personId
+        - month
+        - scopes
+        - erstIch
+        - ruecklagen
+    PotProgress:
+      type:
+        - object
+        - "null"
+      properties:
+        hasPots:
+          type: boolean
+        fulfilled:
+          type: boolean
+          description: alle Töpfe haben ihre Monatsrate
+        fundedPct:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+          maximum: 100
+          description: zugewiesener Anteil am Plan; null ohne Plan
+      required:
+        - hasPots
+        - fulfilled
+        - fundedPct
+    ContributionRule:
+      type: object
+      properties:
+        householdId:
+          type: string
+          format: uuid
+        personId:
+          type: string
+          format: uuid
+        validFrom:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        kind:
+          type: string
+          enum:
+            - fest
+            - prozent
+        amountCents:
+          type:
+            - integer
+            - "null"
+        percentBp:
+          type:
+            - integer
+            - "null"
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - householdId
+        - personId
+        - validFrom
+        - kind
+        - amountCents
+        - percentBp
+        - updatedAt
+    Contributions:
+      type: object
+      properties:
+        householdId:
+          type: string
+          format: uuid
+        month:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        members:
+          type: array
+          items:
+            type: object
+            properties:
+              personId:
+                type: string
+                format: uuid
+              displayName:
+                type: string
+              rule:
+                allOf:
+                  - $ref: "#/components/schemas/ContributionRule"
+                  - type:
+                      - object
+                      - "null"
+                    description: gültige Regel im Monat
+              targetCents:
+                type:
+                  - integer
+                  - "null"
+                description: Soll
+              targetVisible:
+                type: boolean
+                description: false bei „Prozent vom Netto“ der anderen Person ohne Freigabe einzahlung_soll
+              paidCents:
+                type: integer
+                description: "Ist: Einzahlungen im Monat"
+              remainingCents:
+                type:
+                  - integer
+                  - "null"
+                description: Soll − Ist, ≥ 0
+            required:
+              - personId
+              - displayName
+              - rule
+              - targetCents
+              - targetVisible
+              - paidCents
+              - remainingCents
+      required:
+        - householdId
+        - month
+        - members
+    Settlements:
+      type: object
+      properties:
+        householdId:
+          type: string
+          format: uuid
+        balances:
+          type: array
+          items:
+            type: object
+            properties:
+              personId:
+                type: string
+                format: uuid
+              displayName:
+                type: string
+              claimedCents:
+                type: integer
+                description: privat bezahlte gemeinsame Ausgaben
+              repaidCents:
+                type: integer
+                description: erstattet (Überweisung, von Hand)
+              openCents:
+                type: integer
+                description: schuldet das Gemeinsame der Person noch; negativ = zu viel
+            required:
+              - personId
+              - displayName
+              - claimedCents
+              - repaidCents
+              - openCents
+        openItems:
+          type: array
+          items:
+            type: object
+            properties:
+              transactionId:
+                type: string
+                format: uuid
+              personId:
+                type: string
+                format: uuid
+              bookingDate:
+                type: string
+                format: date
+                example: 2026-11-03
+              counterpartyName:
+                type:
+                  - string
+                  - "null"
+              amountCents:
+                type: integer
+                description: gemeinsamer Anteil der Buchung
+              openCents:
+                type: integer
+            required:
+              - transactionId
+              - personId
+              - bookingDate
+              - counterpartyName
+              - amountCents
+              - openCents
+        manual:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              personId:
+                type: string
+                format: uuid
+              amountCents:
+                type: integer
+              settledOn:
+                type: string
+                format: date
+                example: 2026-11-03
+              note:
+                type:
+                  - string
+                  - "null"
+              createdAt:
+                type: string
+                format: date-time
+            required:
+              - id
+              - personId
+              - amountCents
+              - settledOn
+              - note
+              - createdAt
+      required:
+        - householdId
+        - balances
+        - openItems
+        - manual
   parameters: {}
 paths:
   /health:
@@ -1467,6 +1803,7 @@ paths:
       tags:
         - Budget
       summary: Töpfe eines Haushalts
+      description: Lesen auch mit der Freigabe „budget“ der Inhaberin eines privaten Haushalts.
       security:
         - bearerAuth: []
       parameters:
@@ -1717,6 +2054,7 @@ paths:
       tags:
         - Budget
       summary: "Budget eines Monats: „Noch ohne Aufgabe“ und alle Töpfe"
+      description: Lesen auch mit der Freigabe „budget“ der Inhaberin eines privaten Haushalts.
       security:
         - bearerAuth: []
       parameters:
@@ -2093,7 +2431,7 @@ paths:
       tags:
         - Kategorisierung
       summary: Aufteilung festlegen (korrigieren) und bestätigen
-      description: Die Summe der Aufteilungen muss dem Buchungsbetrag entsprechen; Töpfe kommen aus dem Haushalt des Kontos. Weicht eine einfache Zuordnung vom Vorschlag ab, entsteht eine Regel für die Gegenpartei (außer learn = false), und offene Buchungen werden neu vorgeschlagen.
+      description: Die Summe der Aufteilungen muss dem Buchungsbetrag entsprechen; Töpfe kommen aus dem Haushalt des Kontos, bei privaten Konten auch aus dem gemeinsamen (Ausgleich). Weicht eine einfache Zuordnung vom Vorschlag ab, entsteht eine Regel für die Gegenpartei (außer learn = false), und offene Buchungen werden neu vorgeschlagen.
       security:
         - bearerAuth: []
       parameters:
@@ -2113,7 +2451,7 @@ paths:
                 splits:
                   type: array
                   items:
-                    $ref: "#/components/schemas/Split"
+                    $ref: "#/components/schemas/SplitInput"
                   minItems: 1
                   maxItems: 50
                 learn:
@@ -2159,7 +2497,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "422":
-          description: Summe falsch oder Topf aus anderem Haushalt
+          description: Summe falsch, Topf aus anderem Haushalt oder Richtung/Person unpassend
           content:
             application/json:
               schema:
@@ -2300,6 +2638,549 @@ paths:
                 $ref: "#/components/schemas/Error"
         "404":
           description: Regel nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/shares:
+    get:
+      tags:
+        - Paar
+      summary: Eigene Freigaben (erteilt und erhalten)
+      security: &a1
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Freigaben
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  granted:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Share"
+                  received:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ReceivedShare"
+                required:
+                  - granted
+                  - received
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/shares/{personId}/{scope}:
+    put:
+      tags:
+        - Paar
+      summary: Kennzahl oder Sicht auf den eigenen privaten Haushalt freigeben
+      description: Nur an die Person, mit der man einen Haushalt teilt. Wiederholen ändert nichts.
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: personId
+          in: path
+        - schema:
+            type: string
+            enum:
+              - erst_ich
+              - ruecklagen
+              - einzahlung_soll
+              - budget
+            description: erst_ich = ob die Erst-ich-Töpfe des Monats gefüllt sind (Anteil, kein Betrag); ruecklagen = ob die Rücklagen ihre Monatsrate haben (Anteil); einzahlung_soll = Soll der eigenen Einzahlungsregel „Prozent vom Netto“ (verrät sonst das Einkommen); budget = Budget und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern)
+          required: true
+          description: erst_ich = ob die Erst-ich-Töpfe des Monats gefüllt sind (Anteil, kein Betrag); ruecklagen = ob die Rücklagen ihre Monatsrate haben (Anteil); einzahlung_soll = Soll der eigenen Einzahlungsregel „Prozent vom Netto“ (verrät sonst das Einkommen); budget = Budget und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern)
+          name: scope
+          in: path
+      responses:
+        "200":
+          description: Freigabe erteilt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Share"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Person nicht gefunden (oder kein gemeinsamer Haushalt)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags:
+        - Paar
+      summary: Freigabe zurücknehmen (wirkt sofort)
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: personId
+          in: path
+        - schema:
+            type: string
+            enum:
+              - erst_ich
+              - ruecklagen
+              - einzahlung_soll
+              - budget
+            description: erst_ich = ob die Erst-ich-Töpfe des Monats gefüllt sind (Anteil, kein Betrag); ruecklagen = ob die Rücklagen ihre Monatsrate haben (Anteil); einzahlung_soll = Soll der eigenen Einzahlungsregel „Prozent vom Netto“ (verrät sonst das Einkommen); budget = Budget und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern)
+          required: true
+          description: erst_ich = ob die Erst-ich-Töpfe des Monats gefüllt sind (Anteil, kein Betrag); ruecklagen = ob die Rücklagen ihre Monatsrate haben (Anteil); einzahlung_soll = Soll der eigenen Einzahlungsregel „Prozent vom Netto“ (verrät sonst das Einkommen); budget = Budget und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern)
+          name: scope
+          in: path
+      responses:
+        "204":
+          description: Zurückgenommen (oder gab es nicht)
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/persons/{personId}/metrics/{month}:
+    get:
+      tags:
+        - Paar
+      summary: Kennzahlen aus dem privaten Haushalt einer Person
+      description: Für sich selbst alle Kennzahlen, für die andere Person nur die freigegebenen; die übrigen sind null. Kennzahlen sind Anteile und Ja/Nein, keine Beträge.
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: personId
+          in: path
+        - schema:
+            type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+            example: 2026-11
+          required: true
+          name: month
+          in: path
+      responses:
+        "200":
+          description: Kennzahlen
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Metrics"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Person nicht gefunden (oder kein gemeinsamer Haushalt)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/households/{householdId}/contribution-rules:
+    get:
+      tags:
+        - Paar
+      summary: Einzahlungsregeln des gemeinsamen Haushalts (mit Historie)
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+      responses:
+        "200":
+          description: Regeln
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ContributionRule"
+                required:
+                  - items
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Kein gemeinsamer Haushalt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/households/{householdId}/contribution-rules/{month}:
+    put:
+      tags:
+        - Paar
+      summary: Eigene Einzahlungsregel ab einem Monat setzen
+      description: fest = Betrag je Monat (0 = Pause); prozent = Anteil der eigenen Einnahmen des Monats im privaten Haushalt (Netto). Es gilt die jüngste Regel bis zum Monat. Jede Person setzt nur ihre eigene.
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+        - schema:
+            type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+            example: 2026-11
+          required: true
+          name: month
+          in: path
+      requestBody:
+        description: Regel
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kind:
+                  type: string
+                  enum:
+                    - fest
+                    - prozent
+                amountCents:
+                  type:
+                    - integer
+                    - "null"
+                  minimum: 0
+                  maximum: 100000000000
+                percentBp:
+                  type:
+                    - integer
+                    - "null"
+                  minimum: 1
+                  maximum: 10000
+                  description: Anteil in Basispunkten, 4000 = 40 %
+              required:
+                - kind
+      responses:
+        "200":
+          description: Regel gespeichert
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContributionRule"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Kein gemeinsamer Haushalt oder Regel unvollständig
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags:
+        - Paar
+      summary: Eigene Einzahlungsregel ab diesem Monat löschen (die vorige gilt wieder)
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+        - schema:
+            type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+            example: 2026-11
+          required: true
+          name: month
+          in: path
+      responses:
+        "204":
+          description: Gelöscht
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt oder Regel nicht gefunden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Kein gemeinsamer Haushalt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/households/{householdId}/contributions/{month}:
+    get:
+      tags:
+        - Paar
+      summary: "Einzahlungen ins Gemeinsame: Soll und Ist je Person"
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+        - schema:
+            type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+            example: 2026-11
+          required: true
+          name: month
+          in: path
+      responses:
+        "200":
+          description: Einzahlungen des Monats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Contributions"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Kein gemeinsamer Haushalt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/households/{householdId}/settlements:
+    get:
+      tags:
+        - Paar
+      summary: "Ausgleich: was das Gemeinsame jeder Person für privat bezahlte Ausgaben schuldet"
+      description: Entsteht, wenn eine Buchung eines privaten Kontos einem Topf des gemeinsamen Haushalts zugeordnet wird. Erledigt wird er durch eine Überweisung vom gemeinsamen Konto (Art ausgleich) oder von Hand. Erstattungen decken die Ausgaben der Reihe nach, älteste zuerst.
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+      responses:
+        "200":
+          description: Stand des Ausgleichs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Settlements"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Kein gemeinsamer Haushalt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags:
+        - Paar
+      summary: Ausgleich von Hand verbuchen (z. B. bar erhalten), nur für die eigene Forderung
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+      requestBody:
+        description: Erhaltener Betrag
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amountCents:
+                  type: integer
+                  minimum: 1
+                  maximum: 100000000000
+                settledOn:
+                  type: string
+                  format: date
+                  example: 2026-11-03
+                note:
+                  type: string
+                  maxLength: 300
+              required:
+                - amountCents
+      responses:
+        "201":
+          description: Stand des Ausgleichs danach
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Settlements"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Kein gemeinsamer Haushalt oder mehr als offen
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/settlements/{settlementId}:
+    delete:
+      tags:
+        - Paar
+      summary: Von Hand verbuchten Ausgleich zurücknehmen (nur den eigenen)
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: settlementId
+          in: path
+      responses:
+        "204":
+          description: Zurückgenommen
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Ausgleich einer anderen Person
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Ausgleich nicht gefunden (oder kein Zugriff)
           content:
             application/json:
               schema:

@@ -3,9 +3,14 @@
  * (falls angebunden). Vorschläge legen gleich eine Aufteilung an (Status `vorgeschlagen`), damit
  * das Budget stimmt, bevor jemand bestätigt. Eine Korrektur wird zur Regel.
  *
- * Zugriff: nur Mitglieder des Haushalts, zu dem das Konto gehört. Töpfe kommen immer aus dem
- * Haushalt des Kontos (die Datenbank prüft das zusätzlich). Ausgleich zwischen Haushalten
- * kommt mit E4.
+ * Zugriff: nur Mitglieder des Haushalts, zu dem das Konto gehört. Töpfe kommen aus dem Haushalt
+ * des Kontos; ein privates Konto darf zusätzlich Töpfe des gemeinsamen Haushalts verwenden, in
+ * dem die Inhaberin Mitglied ist (daraus entsteht ein Ausgleich, ADR 0004). Die Datenbank prüft
+ * das zusätzlich.
+ *
+ * Überweisungen zwischen eigenen Konten erkennt der Abgleich über die IBAN (Umbuchung,
+ * Einzahlung ins Gemeinsame, Erstattung), nach den Regeln und vor dem LLM. Solche Buchungen
+ * gehen deshalb nie an ein Modell.
  */
 import type { TransactionSql } from 'postgres'
 import { monthOf } from '../budget/months.js'
@@ -19,11 +24,14 @@ import {
   bestRule,
   criteriaFromCorrection,
   describeCriteria,
+  type HouseholdKind,
   type MatchableTransaction,
   type Rule,
   type RuleCriteria,
+  requiredDirection,
   type SplitKind,
   type Target,
+  targetFits,
 } from './rules.js'
 
 type Sql = Db | TransactionSql
@@ -31,13 +39,16 @@ type Sql = Db | TransactionSql
 export interface Split {
   kind: SplitKind
   potId: string | null
+  /** nur bei `einzahlung` und `ausgleich` auf gemeinsamen Konten */
+  personId: string | null
   amountCents: number
 }
 
 export interface Suggestion {
-  source: 'regel' | 'llm'
+  source: 'regel' | 'abgleich' | 'llm'
   kind: SplitKind
   potId: string | null
+  personId: string | null
   confidencePct: number
   reason: string
   ruleId: string | null
@@ -48,7 +59,10 @@ export interface Categorization {
   suggestion: Suggestion | null
 }
 
-export type RuleInput = Partial<RuleCriteria> & Target
+export type RuleInput = Partial<RuleCriteria> &
+  Omit<Target, 'personId'> & {
+    personId?: string | null | undefined
+  }
 
 /** Aufteilungen und Vorschläge zu Buchungen laden (für Listen). */
 export async function loadCategorizations(
@@ -60,9 +74,15 @@ export async function loadCategorizations(
   )
   if (transactionIds.length === 0) return result
   const splits = await sql<
-    { transaction_id: string; kind: SplitKind; pot_id: string | null; amount_cents: string }[]
+    {
+      transaction_id: string
+      kind: SplitKind
+      pot_id: string | null
+      person_id: string | null
+      amount_cents: string
+    }[]
   >`
-    select transaction_id, kind, pot_id, amount_cents from transaction_splits
+    select transaction_id, kind, pot_id, person_id, amount_cents from transaction_splits
     where transaction_id = any(${transactionIds}::uuid[])
     order by transaction_id, abs(amount_cents) desc, id
   `
@@ -70,21 +90,23 @@ export async function loadCategorizations(
     result.get(s.transaction_id)?.splits.push({
       kind: s.kind,
       potId: s.pot_id,
+      personId: s.person_id,
       amountCents: cents(s.amount_cents),
     })
   }
   const suggestions = await sql<
     {
       transaction_id: string
-      source: 'regel' | 'llm'
+      source: 'regel' | 'abgleich' | 'llm'
       kind: SplitKind
       pot_id: string | null
+      person_id: string | null
       confidence_pct: number
       reason: string
       rule_id: string | null
     }[]
   >`
-    select transaction_id, source, kind, pot_id, confidence_pct, reason, rule_id
+    select transaction_id, source, kind, pot_id, person_id, confidence_pct, reason, rule_id
     from transaction_suggestions where transaction_id = any(${transactionIds}::uuid[])
   `
   for (const s of suggestions) {
@@ -94,6 +116,7 @@ export async function loadCategorizations(
         source: s.source,
         kind: s.kind,
         potId: s.pot_id,
+        personId: s.person_id,
         confidencePct: s.confidence_pct,
         reason: s.reason,
         ruleId: s.rule_id,
@@ -115,6 +138,7 @@ interface RuleRow {
   max_amount_cents: string | null
   kind: SplitKind
   pot_id: string | null
+  person_id: string | null
   origin: 'korrektur' | 'manuell'
   created_at: Date
   updated_at: Date
@@ -132,6 +156,7 @@ const toRule = (r: RuleRow): Rule => ({
   maxAmountCents: r.max_amount_cents === null ? null : cents(r.max_amount_cents),
   kind: r.kind,
   potId: r.pot_id,
+  personId: r.person_id,
   origin: r.origin,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
@@ -141,6 +166,8 @@ interface TxRow {
   id: string
   account_id: string
   household_id: string
+  household_kind: HouseholdKind
+  owner_person_id: string | null
   booking_date: string
   amount_cents: string
   counterparty_name: string | null
@@ -160,7 +187,28 @@ const toMatchable = (t: TxRow): MatchableTransaction => ({
 const transactionNotFound = () =>
   new ApiError(404, 'buchung_nicht_gefunden', 'Diese Buchung gibt es nicht.')
 
-const sameTarget = (a: Target, b: Target) => a.kind === b.kind && a.potId === b.potId
+const sameTarget = (a: Target, b: Target) =>
+  a.kind === b.kind && a.potId === b.potId && a.personId === b.personId
+
+interface HouseholdInfo {
+  id: string
+  kind: HouseholdKind
+  ownerPersonId: string | null
+}
+
+const householdOf = (t: TxRow): HouseholdInfo => ({
+  id: t.household_id,
+  kind: t.household_kind,
+  ownerPersonId: t.owner_person_id,
+})
+
+const KIND_LABEL: Record<SplitKind, string> = {
+  topf: 'Topf',
+  einnahme: 'Einnahme',
+  umbuchung: 'Umbuchung',
+  einzahlung: 'Einzahlung',
+  ausgleich: 'Ausgleich',
+}
 
 export class CategorizationService {
   constructor(
@@ -174,9 +222,11 @@ export class CategorizationService {
   private async loadTransactions(sql: Sql, ids: string[]): Promise<TxRow[]> {
     if (ids.length === 0) return []
     return sql<TxRow[]>`
-      select t.id, t.account_id, a.household_id, t.booking_date::text, t.amount_cents,
-             t.counterparty_name, t.counterparty_iban, t.purpose, t.status
+      select t.id, t.account_id, a.household_id, h.kind as household_kind, h.owner_person_id,
+             t.booking_date::text, t.amount_cents, t.counterparty_name, t.counterparty_iban,
+             t.purpose, t.status
       from transactions t join accounts a on a.id = t.account_id
+      join households h on h.id = a.household_id
       where t.id = any(${ids}::uuid[])
     `
   }
@@ -200,9 +250,11 @@ export class CategorizationService {
     if (!access) throw transactionNotFound()
     await this.lockHouseholdAccounts(tx, access.household_id)
     const [row] = await tx<TxRow[]>`
-      select t.id, t.account_id, a.household_id, t.booking_date::text, t.amount_cents,
-             t.counterparty_name, t.counterparty_iban, t.purpose, t.status
+      select t.id, t.account_id, a.household_id, h.kind as household_kind, h.owner_person_id,
+             t.booking_date::text, t.amount_cents, t.counterparty_name, t.counterparty_iban,
+             t.purpose, t.status
       from transactions t join accounts a on a.id = t.account_id
+      join households h on h.id = a.household_id
       where t.id = ${transactionId}
       for update of t
     `
@@ -223,25 +275,164 @@ export class CategorizationService {
     return rows.map(toRule)
   }
 
-  /** Ziel prüfen: Topf muss zum Haushalt gehören und aktiv sein. */
-  private async checkTarget(sql: Sql, householdId: string, target: Target): Promise<void> {
-    if ((target.kind === 'topf') !== (target.potId !== null)) {
-      throw new ApiError(422, 'ziel_ungueltig', 'Ein Topf ist genau bei der Art „topf“ anzugeben.')
-    }
-    if (target.potId === null) return
-    const [pot] = await sql<{ household_id: string; archived_at: Date | null }[]>`
-      select household_id, archived_at from pots where id = ${target.potId}
+  private async household(sql: Sql, householdId: string): Promise<HouseholdInfo> {
+    const [row] = await sql<{ id: string; kind: HouseholdKind; owner_person_id: string | null }[]>`
+      select id, kind, owner_person_id from households where id = ${householdId}
     `
-    if (!pot || pot.household_id !== householdId) {
-      throw new ApiError(
-        422,
-        'topf_anderer_haushalt',
-        'Der Topf gehört nicht zum Haushalt dieses Kontos.',
+    if (!row) throw new ApiError(404, 'haushalt_nicht_gefunden', 'Diesen Haushalt gibt es nicht.')
+    return { id: row.id, kind: row.kind, ownerPersonId: row.owner_person_id }
+  }
+
+  /**
+   * Ziel prüfen und die Person vereinheitlichen. Ein Topf gehört zum Haushalt oder (bei privaten
+   * Haushalten) zu einem gemeinsamen, in dem die Inhaberin Mitglied ist, und ist aktiv.
+   * Einzahlung und Ausgleich gibt es nur zwischen privatem und gemeinsamem Haushalt, mit fester
+   * Richtung (`amountCents`, falls bekannt); im Gemeinsamen mit einem Mitglied als Person.
+   */
+  private async checkTarget(
+    sql: Sql,
+    household: HouseholdInfo,
+    target: Target,
+    amountCents: number | null,
+  ): Promise<Target> {
+    const fail = (code: string, message: string) => new ApiError(422, code, message)
+    if ((target.kind === 'topf') !== (target.potId !== null)) {
+      throw fail('ziel_ungueltig', 'Ein Topf ist genau bei der Art „topf“ anzugeben.')
+    }
+    const paired = target.kind === 'einzahlung' || target.kind === 'ausgleich'
+    if (!paired && target.personId !== null) {
+      throw fail('ziel_ungueltig', 'Eine Person gibt es nur bei Einzahlung und Ausgleich.')
+    }
+    if (target.potId !== null) {
+      const [pot] = await sql<
+        { household_id: string; archived_at: Date | null; shared_member: boolean }[]
+      >`
+        select p.household_id, p.archived_at,
+          (h.kind = 'gemeinsam' and exists (
+             select 1 from household_members m
+             where m.household_id = h.id and m.person_id = ${household.ownerPersonId}))
+            as shared_member
+        from pots p join households h on h.id = p.household_id
+        where p.id = ${target.potId}
+      `
+      const allowed =
+        pot !== undefined &&
+        (pot.household_id === household.id || (household.kind === 'privat' && pot.shared_member))
+      if (!pot || !allowed) {
+        throw fail('topf_anderer_haushalt', 'Der Topf gehört nicht zum Haushalt dieses Kontos.')
+      }
+      if (pot.archived_at !== null) {
+        throw fail('topf_archiviert', 'Dieser Topf ist archiviert.')
+      }
+      return target
+    }
+    if (!paired) return target
+    if (amountCents !== null && !targetFits(target, household.kind, amountCents)) {
+      const expected = requiredDirection(target.kind, household.kind)
+      throw fail(
+        'richtung_unpassend',
+        `${KIND_LABEL[target.kind]} ist in diesem Haushalt immer ein ${
+          expected === 'eingang' ? 'Eingang' : 'Ausgang'
+        }.`,
       )
     }
-    if (pot.archived_at !== null) {
-      throw new ApiError(422, 'topf_archiviert', 'Dieser Topf ist archiviert.')
+    if (household.kind === 'privat') {
+      if (target.personId !== null && target.personId !== household.ownerPersonId) {
+        throw fail('person_ungueltig', 'Auf einem privaten Konto zählt immer die Inhaberin.')
+      }
+      const [shared] = await sql`
+        select 1 from household_members m join households h on h.id = m.household_id
+        where m.person_id = ${household.ownerPersonId} and h.kind = 'gemeinsam'
+      `
+      if (!shared) {
+        throw fail('kein_gemeinsamer_haushalt', 'Es gibt noch keinen gemeinsamen Haushalt.')
+      }
+      return { ...target, personId: null }
     }
+    if (target.personId === null) {
+      throw fail('person_fehlt', 'Bitte angeben, von wem bzw. an wen das Geld geht.')
+    }
+    const [member] = await sql`
+      select 1 from household_members
+      where household_id = ${household.id} and person_id = ${target.personId}
+    `
+    if (!member) throw fail('person_ungueltig', 'Diese Person gehört nicht zum Haushalt.')
+    return target
+  }
+
+  /**
+   * Abgleich: Ist die Gegenpartei ein eigenes Konto (gleiche IBAN)? Dann Umbuchung (gleicher
+   * Haushalt), Einzahlung ins Gemeinsame oder Erstattung (Ausgleich). Die Begründung nennt nie
+   * ein privates Konto der anderen Person, nur ihren Namen.
+   */
+  private async detectTransfer(sql: Sql, t: TxRow): Promise<(Target & { reason: string }) | null> {
+    const amount = cents(t.amount_cents)
+    if (!t.counterparty_iban || amount === 0) return null
+    const candidates = await sql<
+      {
+        household_id: string
+        kind: HouseholdKind
+        owner_person_id: string | null
+        owner_name: string | null
+        related: boolean
+      }[]
+    >`
+      select a.household_id, h.kind, h.owner_person_id, p.display_name as owner_name,
+        exists (
+          select 1 from household_members m
+          where (h.kind = 'gemeinsam' and m.household_id = h.id
+                 and m.person_id = ${t.owner_person_id})
+             or (h.kind = 'privat' and m.household_id = ${t.household_id}
+                 and m.person_id = h.owner_person_id)
+        ) as related
+      from accounts a
+      join households h on h.id = a.household_id
+      left join persons p on p.id = h.owner_person_id
+      where a.iban = ${t.counterparty_iban} and a.id <> ${t.account_id}
+      order by a.created_at
+    `
+    for (const c of candidates) {
+      if (c.household_id === t.household_id) {
+        return {
+          kind: 'umbuchung',
+          potId: null,
+          personId: null,
+          reason: 'Abgleich: Überweisung zwischen eigenen Konten dieses Haushalts',
+        }
+      }
+      if (!c.related) continue
+      if (t.household_kind === 'privat' && c.kind === 'gemeinsam') {
+        return amount < 0
+          ? {
+              kind: 'einzahlung',
+              potId: null,
+              personId: null,
+              reason: 'Abgleich: Überweisung aufs gemeinsame Konto',
+            }
+          : {
+              kind: 'ausgleich',
+              potId: null,
+              personId: null,
+              reason: 'Abgleich: Erstattung vom gemeinsamen Konto',
+            }
+      }
+      if (t.household_kind === 'gemeinsam' && c.kind === 'privat' && c.owner_person_id) {
+        return amount > 0
+          ? {
+              kind: 'einzahlung',
+              potId: null,
+              personId: c.owner_person_id,
+              reason: `Abgleich: Einzahlung von ${c.owner_name}`,
+            }
+          : {
+              kind: 'ausgleich',
+              potId: null,
+              personId: c.owner_person_id,
+              reason: `Abgleich: Erstattung an ${c.owner_name}`,
+            }
+      }
+    }
+    return null
   }
 
   private async replaceSplits(
@@ -257,6 +448,7 @@ export class CategorizationService {
           transaction_id: transactionId,
           kind: s.kind,
           pot_id: s.potId,
+          person_id: s.personId,
           amount_cents: s.amountCents,
         })),
       )}
@@ -298,12 +490,18 @@ export class CategorizationService {
         rules = await this.activeRules(tx, t.household_id)
         rulesByHousehold.set(t.household_id, rules)
       }
-      const rule = bestRule(rules, toMatchable(t))
-      if (!rule) {
+      // Nur Regeln, deren Ziel zur Richtung passt (Einzahlung und Ausgleich haben eine feste).
+      const amount = cents(t.amount_cents)
+      const rule = bestRule(
+        rules.filter((r) => targetFits(r, t.household_kind, amount)),
+        toMatchable(t),
+      )
+      const transfer = rule ? null : await this.detectTransfer(tx, t)
+      if (!rule && !transfer) {
         const [stale] = await tx<{ n: number }[]>`
           with removed as (
             delete from transaction_suggestions
-            where transaction_id = ${t.id} and source = 'regel' returning 1
+            where transaction_id = ${t.id} and source in ('regel', 'abgleich') returning 1
           )
           select count(*)::int as n from removed
         `
@@ -314,17 +512,24 @@ export class CategorizationService {
         }
         continue
       }
-      const target = { kind: rule.kind, potId: rule.potId }
-      await this.replaceSplits(tx, t.id, [{ ...target, amountCents: cents(t.amount_cents) }])
-      const reason = `Regel: ${describeCriteria(rule)}`.slice(0, 300)
+      const target: Target = rule
+        ? { kind: rule.kind, potId: rule.potId, personId: rule.personId }
+        : { kind: (transfer as Target).kind, potId: null, personId: (transfer as Target).personId }
+      const source = rule ? 'regel' : 'abgleich'
+      const reason = (rule ? `Regel: ${describeCriteria(rule)}` : (transfer?.reason ?? '')).slice(
+        0,
+        300,
+      )
+      await this.replaceSplits(tx, t.id, [{ ...target, amountCents: amount }])
       await tx`
         insert into transaction_suggestions
-          (transaction_id, source, kind, pot_id, confidence_pct, reason, rule_id)
-        values (${t.id}, 'regel', ${target.kind}, ${target.potId}, 100, ${reason}, ${rule.id})
+          (transaction_id, source, kind, pot_id, person_id, confidence_pct, reason, rule_id)
+        values (${t.id}, ${source}, ${target.kind}, ${target.potId}, ${target.personId}, 100,
+                ${reason}, ${rule?.id ?? null})
         on conflict (transaction_id) do update set
           source = excluded.source, kind = excluded.kind, pot_id = excluded.pot_id,
-          confidence_pct = excluded.confidence_pct, reason = excluded.reason,
-          rule_id = excluded.rule_id, created_at = now()
+          person_id = excluded.person_id, confidence_pct = excluded.confidence_pct,
+          reason = excluded.reason, rule_id = excluded.rule_id, created_at = now()
       `
       await tx`update transactions set status = 'vorgeschlagen' where id = ${t.id}`
       touched.push(t)
@@ -348,9 +553,11 @@ export class CategorizationService {
   async suggestWithLlm(transactionIds: string[], asOf: IsoDate = todayUtc()): Promise<number> {
     if (!this.llm || transactionIds.length === 0) return 0
     const pending = await this.db<TxRow[]>`
-      select t.id, t.account_id, a.household_id, t.booking_date::text, t.amount_cents,
-             t.counterparty_name, t.counterparty_iban, t.purpose, t.status
+      select t.id, t.account_id, a.household_id, h.kind as household_kind, h.owner_person_id,
+             t.booking_date::text, t.amount_cents, t.counterparty_name, t.counterparty_iban,
+             t.purpose, t.status
       from transactions t join accounts a on a.id = t.account_id
+      join households h on h.id = a.household_id
       where t.id = any(${transactionIds}::uuid[])
         and t.status = 'importiert' and t.llm_checked_at is null
       order by t.booking_date, t.id
@@ -393,7 +600,12 @@ export class CategorizationService {
         await tx`update transactions set llm_checked_at = now() where id = ${t.id}`
         if (!valid || !result || row?.status !== 'importiert') return
         await this.replaceSplits(tx, t.id, [
-          { kind: result.kind, potId: result.potId, amountCents: cents(t.amount_cents) },
+          {
+            kind: result.kind,
+            potId: result.potId,
+            personId: null,
+            amountCents: cents(t.amount_cents),
+          },
         ])
         await tx`
           insert into transaction_suggestions
@@ -403,7 +615,7 @@ export class CategorizationService {
           on conflict (transaction_id) do update set
             source = excluded.source, kind = excluded.kind, pot_id = excluded.pot_id,
             confidence_pct = excluded.confidence_pct, reason = excluded.reason,
-            rule_id = null, created_at = now()
+            person_id = null, rule_id = null, created_at = now()
         `
         await tx`update transactions set status = 'vorgeschlagen' where id = ${t.id}`
         await this.refreshErstIch(
@@ -493,10 +705,17 @@ export class CategorizationService {
           `Die Aufteilungen ergeben ${total} Cent, die Buchung hat ${amount} Cent.`,
         )
       }
-      for (const s of splits) await this.checkTarget(tx, t.household_id, s)
+      const household = householdOf(t)
+      const checked: Split[] = []
+      for (const s of splits) {
+        checked.push({
+          ...(await this.checkTarget(tx, household, s, s.amountCents)),
+          amountCents: s.amountCents,
+        })
+      }
 
       const before = (await loadCategorizations(tx, [t.id])).get(t.id)
-      await this.replaceSplits(tx, t.id, splits)
+      await this.replaceSplits(tx, t.id, checked)
       await tx`
         update transactions set status = 'bestaetigt', confirmed_by = ${personId},
           confirmed_at = now()
@@ -505,9 +724,9 @@ export class CategorizationService {
 
       let rule: Rule | null = null
       let resuggested = 0
-      const [only] = splits
+      const [only] = checked
       const corrected =
-        splits.length === 1 &&
+        checked.length === 1 &&
         only !== undefined &&
         (!before?.suggestion || !sameTarget(before.suggestion, only))
       const criteria = corrected && options.learn ? criteriaFromCorrection(toMatchable(t)) : null
@@ -558,19 +777,20 @@ export class CategorizationService {
     const [row] = existing
       ? await tx<RuleRow[]>`
           update category_rules set kind = ${target.kind}, pot_id = ${target.potId},
-            origin = ${origin}, updated_at = now()
+            person_id = ${target.personId}, origin = ${origin}, updated_at = now()
           where id = ${existing.id}
           returning *
         `
       : await tx<RuleRow[]>`
           insert into category_rules (
             household_id, account_id, direction, counterparty_iban, counterparty_name,
-            purpose_contains, min_amount_cents, max_amount_cents, kind, pot_id, origin, created_by
+            purpose_contains, min_amount_cents, max_amount_cents, kind, pot_id, person_id, origin,
+            created_by
           ) values (
             ${householdId}, ${criteria.accountId}, ${criteria.direction},
             ${criteria.counterpartyIban}, ${criteria.counterpartyName},
             ${criteria.purposeContains}, ${criteria.minAmountCents}, ${criteria.maxAmountCents},
-            ${target.kind}, ${target.potId}, ${origin}, ${personId}
+            ${target.kind}, ${target.potId}, ${target.personId}, ${origin}, ${personId}
           )
           returning *
         `
@@ -615,7 +835,27 @@ export class CategorizationService {
     }
     return this.db.begin(async (tx) => {
       await this.budget.householdAccess(tx, personId, householdId)
-      await this.checkTarget(tx, householdId, input)
+      const household = await this.household(tx, householdId)
+      const target = await this.checkTarget(
+        tx,
+        household,
+        { kind: input.kind, potId: input.potId, personId: input.personId ?? null },
+        null,
+      )
+      // Einzahlung und Ausgleich haben eine feste Richtung; die Regel bekommt sie als Merkmal.
+      const required = requiredDirection(target.kind, household.kind)
+      if (required !== null) {
+        if (criteria.direction !== null && criteria.direction !== required) {
+          throw new ApiError(
+            422,
+            'richtung_unpassend',
+            `${KIND_LABEL[target.kind]} ist in diesem Haushalt immer ein ${
+              required === 'eingang' ? 'Eingang' : 'Ausgang'
+            }.`,
+          )
+        }
+        criteria.direction = required
+      }
       if (criteria.accountId !== null) {
         const [account] = await tx`
           select 1 from accounts where id = ${criteria.accountId} and household_id = ${householdId}
@@ -634,14 +874,7 @@ export class CategorizationService {
         select t.id from transactions t join accounts a on a.id = t.account_id
         where a.household_id = ${householdId} and t.status <> 'bestaetigt'
       `
-      const rule = await this.upsertRule(
-        tx,
-        householdId,
-        personId,
-        criteria,
-        { kind: input.kind, potId: input.potId },
-        'manuell',
-      )
+      const rule = await this.upsertRule(tx, householdId, personId, criteria, target, 'manuell')
       const resuggested = await this.applyRules(
         tx,
         open.map((o) => o.id),

@@ -4,16 +4,43 @@
  */
 import { normalizeText } from '../ledger/import-key.js'
 
-export type SplitKind = 'topf' | 'einnahme' | 'umbuchung'
+export type SplitKind = 'topf' | 'einnahme' | 'umbuchung' | 'einzahlung' | 'ausgleich'
+export type HouseholdKind = 'privat' | 'gemeinsam'
+export type Direction = 'eingang' | 'ausgang'
 
 export interface Target {
   kind: SplitKind
   potId: string | null
+  /** nur bei `einzahlung` und `ausgleich` auf gemeinsamen Konten: von wem bzw. an wen */
+  personId: string | null
+}
+
+/**
+ * Einzahlung und Ausgleich haben je Haushaltsart eine feste Richtung (ADR 0004): Einzahlungen
+ * gehen vom privaten aufs gemeinsame Konto, Erstattungen zurück. Sonst `null` (beide Richtungen).
+ */
+export function requiredDirection(kind: SplitKind, household: HouseholdKind): Direction | null {
+  if (kind === 'einzahlung') return household === 'privat' ? 'ausgang' : 'eingang'
+  if (kind === 'ausgleich') return household === 'privat' ? 'eingang' : 'ausgang'
+  return null
+}
+
+export const directionOf = (amountCents: number): Direction =>
+  amountCents >= 0 ? 'eingang' : 'ausgang'
+
+/** Passt das Ziel zur Richtung der Buchung? Verhindert, dass eine Regel Unzulässiges schreibt. */
+export function targetFits(
+  target: Pick<Target, 'kind'>,
+  household: HouseholdKind,
+  amountCents: number,
+): boolean {
+  const required = requiredDirection(target.kind, household)
+  return required === null || (amountCents !== 0 && required === directionOf(amountCents))
 }
 
 export interface RuleCriteria {
   accountId: string | null
-  direction: 'eingang' | 'ausgang' | null
+  direction: Direction | null
   counterpartyIban: string | null
   /** normalisiert, Vergleich ohne Groß-/Kleinschreibung */
   counterpartyName: string | null
@@ -58,7 +85,7 @@ export function specificity(r: RuleCriteria): number {
 export function matches(rule: RuleCriteria, t: MatchableTransaction): boolean {
   if (specificity(rule) === 0) return false
   if (rule.accountId !== null && rule.accountId !== t.accountId) return false
-  if (rule.direction !== null && rule.direction !== (t.amountCents >= 0 ? 'eingang' : 'ausgang')) {
+  if (rule.direction !== null && rule.direction !== directionOf(t.amountCents)) {
     return false
   }
   if (rule.counterpartyIban !== null && rule.counterpartyIban !== t.counterpartyIban) return false
@@ -98,7 +125,7 @@ export function criteriaFromCorrection(t: MatchableTransaction): RuleCriteria | 
   if (!iban && !name) return null
   return {
     accountId: null,
-    direction: t.amountCents >= 0 ? 'eingang' : 'ausgang',
+    direction: directionOf(t.amountCents),
     counterpartyIban: iban || null,
     counterpartyName: iban ? null : normalizeText(t.counterpartyName ?? undefined),
     purposeContains: null,

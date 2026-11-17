@@ -69,10 +69,16 @@ const BudgetMonthSchema = z
       .int()
       .openapi({
         description:
-          '„Noch ohne Aufgabe“: Einnahmen bis zum Monat − alle Zuweisungen (auch spätere Monate) − ' +
-          'Überziehung der Vormonate',
+          '„Noch ohne Aufgabe“: Einnahmen bis zum Monat − Einzahlungen ins Gemeinsame − alle ' +
+          'Zuweisungen (auch spätere Monate) − Überziehung der Vormonate',
       }),
-    inflowsCents: z.number().int().openapi({ description: 'Einnahmen im Monat' }),
+    inflowsCents: z.number().int().openapi({
+      description: 'Einnahmen im Monat; im gemeinsamen Haushalt samt Einzahlungen der Personen',
+    }),
+    contributionsCents: z.number().int().openapi({
+      description:
+        'Einzahlungen ins Gemeinsame im Monat (negativ, nur privat); mindern „Noch ohne Aufgabe“',
+    }),
     assignedCents: z.number().int(),
     activityCents: z.number().int(),
     overspentPreviousCents: z
@@ -96,6 +102,7 @@ const listPots = createRoute({
   path: '/v1/households/{householdId}/pots',
   tags: ['Budget'],
   summary: 'Töpfe eines Haushalts',
+  description: 'Lesen auch mit der Freigabe „budget“ der Inhaberin eines privaten Haushalts.',
   security: [{ bearerAuth: [] }],
   middleware: [requireAuth] as const,
   request: {
@@ -185,6 +192,7 @@ const getMonth = createRoute({
   path: '/v1/households/{householdId}/budget/{month}',
   tags: ['Budget'],
   summary: 'Budget eines Monats: „Noch ohne Aufgabe“ und alle Töpfe',
+  description: 'Lesen auch mit der Freigabe „budget“ der Inhaberin eines privaten Haushalts.',
   security: [{ bearerAuth: [] }],
   middleware: [requireAuth] as const,
   request: { params: monthParams },

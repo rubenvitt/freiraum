@@ -74,6 +74,7 @@ describe('Regeln (rein)', () => {
     maxAmountCents: null,
     kind: 'einnahme',
     potId: null,
+    personId: null,
     origin: 'manuell',
     createdAt: new Date(0),
     updatedAt: new Date(0),

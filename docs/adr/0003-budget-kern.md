@@ -97,8 +97,8 @@ Abgeschlossene Monate rührt sie nicht an.
 
 ### Haushaltsgrenzen
 
-Töpfe kommen immer aus dem Haushalt des Kontos. Eine private Ausgabe für einen gemeinsamen Topf
-(Ausgleich) kommt mit E4 (FREI-5).
+Töpfe kommen aus dem Haushalt des Kontos. Private Konten dürfen seit E4 auch Töpfe des
+gemeinsamen Haushalts verwenden (Ausgleich), siehe [ADR 0004](0004-paar-modell.md).
 
 ## Folgen
 

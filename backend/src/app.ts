@@ -5,12 +5,14 @@ import { BudgetService } from './budget/service.js'
 import type { LlmCategorizer } from './categorize/llm.js'
 import { CategorizationService } from './categorize/service.js'
 import type { Config } from './config.js'
+import { CoupleService } from './couple/service.js'
 import type { Db } from './db/client.js'
 import { ApiError } from './errors.js'
 import { LedgerService } from './ledger/service.js'
 import { authRoutes } from './routes/auth.js'
 import { budgetRoutes } from './routes/budget.js'
 import { categorizeRoutes } from './routes/categorize.js'
+import { coupleRoutes } from './routes/couple.js'
 import { healthRoutes } from './routes/health.js'
 import { ledgerRoutes } from './routes/ledger.js'
 
@@ -21,6 +23,7 @@ export type AppEnv = {
     auth: AuthService
     budget: BudgetService
     categorize: CategorizationService
+    couple: CoupleService
     db: Db
     ledger: LedgerService
     session: { id: string; person: Person }
@@ -33,6 +36,7 @@ export function createApp(deps: { db: Db; config: Config; llm?: LlmCategorizer |
   const auth = new AuthService(deps.db, deps.config)
   const budget = new BudgetService(deps.db)
   const categorize = new CategorizationService(deps.db, budget, deps.llm ?? null)
+  const couple = new CoupleService(deps.db, budget)
   const ledger = new LedgerService(deps.db, {
     // Regeln in der Import-Transaktion, LLM danach (Netzwerk, ohne offene Transaktion).
     inTransaction: async (tx, ids, asOf) => {
@@ -63,6 +67,7 @@ export function createApp(deps: { db: Db; config: Config; llm?: LlmCategorizer |
     c.set('auth', auth)
     c.set('budget', budget)
     c.set('categorize', categorize)
+    c.set('couple', couple)
     c.set('db', deps.db)
     c.set('ledger', ledger)
     await next()
@@ -90,10 +95,11 @@ export function createApp(deps: { db: Db; config: Config; llm?: LlmCategorizer |
   ledgerRoutes(app)
   budgetRoutes(app)
   categorizeRoutes(app)
+  coupleRoutes(app)
 
   app.doc31('/openapi.json', openApiInfo)
 
-  return { app, auth, budget, categorize, ledger }
+  return { app, auth, budget, categorize, couple, ledger }
 }
 
 export const openApiInfo = {
