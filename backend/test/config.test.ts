@@ -29,7 +29,7 @@ describe('Konfiguration', () => {
       baseUrl: 'https://openrouter.ai/api/v1',
       apiKey: 'sk-test',
       model: 'beispiel/modell',
-      timeoutMs: 20_000,
+      timeoutMs: 60_000,
       zeroDataRetention: true,
     })
     const custom = loadConfig({

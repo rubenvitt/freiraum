@@ -46,12 +46,13 @@ export function createApp(deps: { db: Db; config: Config; llm?: LlmCategorizer |
   const budget = new BudgetService(deps.db)
   const categorize = new CategorizationService(deps.db, budget, llm)
   const ledger = new LedgerService(deps.db, {
-    // Regeln in der Import-Transaktion, LLM danach (Netzwerk, ohne offene Transaktion).
+    // Regeln in der Import-Transaktion, LLM danach im Hintergrund (Netzwerk, ohne offene
+    // Transaktion; der Import wartet nicht darauf).
     inTransaction: async (tx, ids, asOf) => {
       await categorize.applyRules(tx, ids, asOf)
     },
     afterCommit: async (ids, asOf) => {
-      await categorize.suggestWithLlm(ids, asOf)
+      categorize.queueLlmSuggestions(ids, asOf)
     },
   })
 

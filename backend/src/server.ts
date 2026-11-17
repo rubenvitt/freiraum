@@ -19,22 +19,21 @@ purge.unref()
 
 if (config.llm) {
   console.log(`LLM-Vorschläge mit ${config.llm.model} über ${new URL(config.llm.baseUrl).host}`)
-  // Vorschläge nachholen, die beim Import am Modell gescheitert sind.
+  // Vorschläge nachholen, die am Modell gescheitert sind oder bei einem Neustart liegen blieben.
   let retrying = false
-  const retry = setInterval(
-    async () => {
-      if (retrying) return
-      retrying = true
-      try {
-        await categorize.retryLlmSuggestions()
-      } catch (err) {
-        console.error('LLM-Vorschläge nachholen fehlgeschlagen', err)
-      } finally {
-        retrying = false
-      }
-    },
-    15 * 60 * 1000,
-  )
+  const retryLlm = async () => {
+    if (retrying) return
+    retrying = true
+    try {
+      await categorize.retryLlmSuggestions()
+    } catch (err) {
+      console.error('LLM-Vorschläge nachholen fehlgeschlagen', err)
+    } finally {
+      retrying = false
+    }
+  }
+  void retryLlm()
+  const retry = setInterval(retryLlm, 15 * 60 * 1000)
   retry.unref()
 }
 

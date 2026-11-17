@@ -1,10 +1,13 @@
 /**
- * Schnittstelle für LLM-Vorschläge. Welches Modell (lokal oder per API) es wird, ist noch offen
- * (Spec, „Offene Entscheidungen“). Ohne Anbindung schlägt nur das Regelwerk vor.
+ * Schnittstelle für LLM-Vorschläge (Anbindung: `openrouter.ts`, ADR 0003). Ohne Anbindung
+ * schlägt nur das Regelwerk vor.
+ *
+ * Eine Anfrage bündelt mehrere Buchungen **eines** Haushalts (FREI-16), damit große Importe mit
+ * wenigen Anfragen auskommen.
  *
  * Datenschutz: Das Modell bekommt nur Datum, Betrag, Gegenpartei und Verwendungszweck einer
- * Buchung, keine IBAN und keine Kontodaten, und nur die Töpfe des Haushalts, zu dem das
- * Konto gehört.
+ * Buchung, keine IBAN und keine Kontodaten, und nur die Töpfe des Haushalts, zu dem die Konten
+ * gehören. Buchungen verschiedener Haushalte landen nie in derselben Anfrage.
  */
 import type { SplitKind } from './rules.js'
 
@@ -15,13 +18,15 @@ export interface LlmOption {
   groupName: string | null
 }
 
+export interface LlmTransaction {
+  bookingDate: string
+  amountCents: number
+  counterpartyName: string | null
+  purpose: string | null
+}
+
 export interface LlmRequest {
-  transaction: {
-    bookingDate: string
-    amountCents: number
-    counterpartyName: string | null
-    purpose: string | null
-  }
+  transactions: LlmTransaction[]
   options: LlmOption[]
 }
 
@@ -35,5 +40,10 @@ export interface LlmSuggestion {
 }
 
 export interface LlmCategorizer {
-  suggest(request: LlmRequest): Promise<LlmSuggestion | null>
+  /**
+   * Je Buchung ein Vorschlag, in derselben Reihenfolge wie `request.transactions`; `null`, wenn
+   * das Modell für diese Buchung nichts Brauchbares geliefert hat. Netzwerk-, HTTP- und
+   * Zeitfehler werfen: Dann gilt keine Buchung der Anfrage als beantwortet.
+   */
+  suggest(request: LlmRequest): Promise<(LlmSuggestion | null)[]>
 }

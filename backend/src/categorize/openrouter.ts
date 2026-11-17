@@ -3,20 +3,25 @@
  * OpenAI-kompatible Chat-Completions-Schnittstelle, die Basis-URL ist austauschbar (etwa für ein
  * lokales Modell mit derselben Schnittstelle).
  *
+ * Eine Anfrage trägt mehrere Buchungen (FREI-16); das Modell antwortet mit einem Array, je
+ * Buchung ein Eintrag.
+ *
  * Datenschutz: Es geht nur hinaus, was in `LlmRequest` steht (Datum, Betrag, Gegenpartei,
  * Verwendungszweck, Töpfe des Haushalts). Bei OpenRouter verlangt jede Anfrage Anbieter, die
  * nichts speichern oder zum Training nutzen (`data_collection: deny`, standardmäßig auch `zdr`).
- * Pot-IDs verlassen den Server nicht: Das Modell wählt aus kurzen Kennungen (`o1`, `o2`, …).
+ * IDs verlassen den Server nicht: Das Modell sieht kurze Kennungen für Buchungen (`b1`, `b2`, …)
+ * und Optionen (`o1`, `o2`, …).
  */
 import { z } from 'zod'
 import type { LlmConfig } from '../config.js'
-import type { LlmCategorizer, LlmOption, LlmRequest, LlmSuggestion } from './llm.js'
+import type { LlmCategorizer, LlmOption, LlmRequest, LlmSuggestion, LlmTransaction } from './llm.js'
 
 type Fetch = typeof globalThis.fetch
 
 const SYSTEM_PROMPT = [
-  'Du ordnest Kontobuchungen eines privaten Haushaltsbudgets (Topf-Prinzip) genau einer der',
-  'angebotenen Optionen zu.',
+  'Du ordnest Kontobuchungen eines privaten Haushaltsbudgets (Topf-Prinzip) jeweils genau einer',
+  'der angebotenen Optionen zu.',
+  'Antworte für jede Buchung genau einmal, mit ihrer id.',
   'Negative Beträge sind Ausgaben, positive Beträge Eingänge.',
   '„Umbuchung“ nur, wenn Geld erkennbar zwischen eigenen Konten wandert (etwa Sparkonto,',
   'Kreditkartenabrechnung).',
@@ -25,10 +30,14 @@ const SYSTEM_PROMPT = [
 ].join(' ')
 
 const answerSchema = z.object({
+  buchung: z.string(),
   option: z.string(),
   confidence_pct: z.number(),
   reason: z.string(),
 })
+
+/** Einzelne kaputte Einträge verwerfen, die übrigen behalten. */
+const answersSchema = z.object({ antworten: z.array(z.unknown()) })
 
 const completionSchema = z.object({
   choices: z
@@ -37,6 +46,10 @@ const completionSchema = z.object({
 })
 
 export const optionId = (index: number) => `o${index + 1}`
+export const transactionId = (index: number) => `b${index + 1}`
+
+/** Antwortlänge je Buchung (Kennungen, Konfidenz, ein Satz), großzügig bemessen. */
+const TOKENS_PER_TRANSACTION = 150
 
 const formatEuro = (amountCents: number) => {
   const sign = amountCents < 0 ? '-' : ''
@@ -50,14 +63,14 @@ const describeOption = (o: LlmOption) => (o.groupName ? `${o.label} (${o.groupNa
 
 /** Inhalt der Nutzernachricht. Bewusst nur die Felder aus `LlmRequest`. */
 export function buildUserMessage(request: LlmRequest): string {
-  const t = request.transaction
   return JSON.stringify({
-    buchung: {
+    buchungen: request.transactions.map((t: LlmTransaction, i) => ({
+      id: transactionId(i),
       datum: t.bookingDate,
       betrag: formatEuro(t.amountCents),
       gegenpartei: t.counterpartyName,
       verwendungszweck: t.purpose,
-    },
+    })),
     optionen: request.options.map((o, i) => ({ id: optionId(i), ziel: describeOption(o) })),
   })
 }
@@ -85,15 +98,20 @@ export class OpenRouterCategorizer implements LlmCategorizer {
 
   /**
    * Netzwerk-, HTTP- und Zeitfehler werfen (der Aufrufer versucht es später erneut). Eine
-   * Antwort, die nicht passt, ergibt `null`: Das Modell hatte seine Gelegenheit.
+   * Antwort, die nicht passt, ergibt `null` für die betroffenen Buchungen: Das Modell hatte seine
+   * Gelegenheit.
    */
-  async suggest(request: LlmRequest): Promise<LlmSuggestion | null> {
-    if (request.options.length === 0) return null
-    const ids = request.options.map((_, i) => optionId(i))
+  async suggest(request: LlmRequest): Promise<(LlmSuggestion | null)[]> {
+    const n = request.transactions.length
+    const none = () => Array.from({ length: n }, () => null)
+    if (n === 0) return []
+    if (request.options.length === 0) return none()
+    const optionIds = request.options.map((_, i) => optionId(i))
+    const transactionIds = request.transactions.map((_, i) => transactionId(i))
     const body = {
       model: this.config.model,
       temperature: 0,
-      max_tokens: 300,
+      max_tokens: 200 + TOKENS_PER_TRANSACTION * n,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: buildUserMessage(request) },
@@ -106,11 +124,31 @@ export class OpenRouterCategorizer implements LlmCategorizer {
           schema: {
             type: 'object',
             properties: {
-              option: { type: 'string', enum: ids, description: 'id der gewählten Option' },
-              confidence_pct: { type: 'integer', description: 'Konfidenz 0–100' },
-              reason: { type: 'string', description: 'Begründung in einem Satz' },
+              antworten: {
+                type: 'array',
+                description: 'je Buchung genau eine Antwort',
+                items: {
+                  type: 'object',
+                  properties: {
+                    buchung: {
+                      type: 'string',
+                      enum: transactionIds,
+                      description: 'id der Buchung',
+                    },
+                    option: {
+                      type: 'string',
+                      enum: optionIds,
+                      description: 'id der gewählten Option',
+                    },
+                    confidence_pct: { type: 'integer', description: 'Konfidenz 0–100' },
+                    reason: { type: 'string', description: 'Begründung in einem Satz' },
+                  },
+                  required: ['buchung', 'option', 'confidence_pct', 'reason'],
+                  additionalProperties: false,
+                },
+              },
             },
-            required: ['option', 'confidence_pct', 'reason'],
+            required: ['antworten'],
             additionalProperties: false,
           },
         },
@@ -151,23 +189,35 @@ export class OpenRouterCategorizer implements LlmCategorizer {
 
     const completion = completionSchema.safeParse(await res.json().catch(() => null))
     const content = completion.success ? completion.data.choices[0]?.message.content : null
-    if (!content) return null
+    if (!content) return none()
     let parsed: unknown
     try {
       parsed = JSON.parse(unwrapJson(content))
     } catch {
-      return null
+      return none()
     }
-    const answer = answerSchema.safeParse(parsed)
-    if (!answer.success) return null
-    const option = request.options[ids.indexOf(answer.data.option)]
-    const reason = answer.data.reason.replace(/\s+/g, ' ').trim()
-    if (!option || !reason || !Number.isFinite(answer.data.confidence_pct)) return null
-    return {
-      kind: option.kind,
-      potId: option.potId,
-      confidencePct: Math.min(100, Math.max(0, Math.round(answer.data.confidence_pct))),
-      reason,
+    const answers = answersSchema.safeParse(parsed)
+    if (!answers.success) return none()
+
+    const result: (LlmSuggestion | null)[] = none()
+    const seen = new Set<number>()
+    for (const raw of answers.data.antworten) {
+      const answer = answerSchema.safeParse(raw)
+      if (!answer.success) continue
+      const index = transactionIds.indexOf(answer.data.buchung)
+      // Unbekannte Buchung oder doppelte Antwort: Es zählt die erste Antwort zu einer Buchung.
+      if (index < 0 || seen.has(index)) continue
+      seen.add(index)
+      const option = request.options[optionIds.indexOf(answer.data.option)]
+      const reason = answer.data.reason.replace(/\s+/g, ' ').trim()
+      if (!option || !reason || !Number.isFinite(answer.data.confidence_pct)) continue
+      result[index] = {
+        kind: option.kind,
+        potId: option.potId,
+        confidencePct: Math.min(100, Math.max(0, Math.round(answer.data.confidence_pct))),
+        reason,
+      }
     }
+    return result
   }
 }
