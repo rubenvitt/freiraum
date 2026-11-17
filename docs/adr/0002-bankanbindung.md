@@ -1,6 +1,6 @@
 # ADR 0002: Bankanbindung (E1-Spike)
 
-Stand: 17.11.2026 · Status: **vorgeschlagen**, Entscheidung offen bis zur Prüfung der eigenen Banken (FREI-2)
+Stand: 17.11.2026 · Status: **angenommen** (FREI-2, FREI-10)
 
 ## Kontext
 
@@ -10,7 +10,7 @@ Bankanbindung). Kriterien: alle eigenen Banken abgedeckt, Kosten, Aufwand der re
 Zustimmung, Datenschutz.
 
 Welche Banken genau gebraucht werden, steht bewusst nicht im (öffentlichen) Repo; die Prüfung
-dazu läuft in FREI-2.
+je Konto ist in FREI-10 festgehalten.
 
 ## Ergebnisse der Recherche (Stand November 2026)
 
@@ -72,17 +72,35 @@ dazu läuft in FREI-2.
 | Geheimnisse auf dem Server | Banking-PIN | privater Schlüssel fürs JWT, keine PIN |
 | Abhängigkeit | Bibliothek (LGPL), DK-Registrierung | Geschäftsmodell des Anbieters |
 
-## Vorschlag
+## Prüfung der eigenen Konten (FREI-10)
 
-1. **FinTS direkt mit `lib-fints` als Hauptweg** für alle Konten, deren Bank FinTS mit
-   entkoppelter Freigabe anbietet. Kein Dritter sieht die Umsätze, und es entstehen keine Kosten.
-   Die Produktregistrierung **sofort beantragen**, weil sie Wochen dauern kann.
-2. **Enable Banking als zweiter Anbieter** nur für Konten ohne brauchbares FinTS (Neobanken,
-   Banken ohne App-Freigabe über FinTS).
-3. **CSV-Import** als Rückfallebene für Konten, die beides nicht können.
+- Die Hälfte der eigenen Banken bietet **kein FinTS**. Für sie bleibt nur ein PSD2-Anbieter, also
+  wird Enable Banking ohnehin gebraucht.
+- Bei einer der FinTS-Banken ist der Abruf über FinTS eingeschränkt (Login alle 90 Tage,
+  Historie 90 Tage, Freigabe in der App über FinTS nicht belegt).
+- Ein Konto (nur Sparen und Investieren) liefert per PSD2 nur **Betrag, Währung und
+  Buchungstag**, ohne Gegenpartei und Verwendungszweck. Für dieses Konto reicht das.
 
-Ändert die Prüfung der eigenen Banken das Bild (z. B. die meisten Konten ohne FinTS), dreht sich
-die Reihenfolge von 1 und 2 um. Die Importschicht hängt davon nicht ab.
+## Entscheidung
+
+1. **Enable Banking für alle Konten** im kostenlosen „restricted mode“ (eigene, im Portal
+   verknüpfte Konten). Ein Adapter statt zwei, keine Banking-PIN auf dem Homelab, keine
+   FinTS-Produktregistrierung. Die Zustimmung wird je Bank alle bis zu 180 Tage über die
+   Seite bzw. App der Bank erneuert.
+2. **In Kauf genommen:** Enable Banking (regulierter AISP in Finnland) sieht die Umsätze.
+3. **FinTS verworfen**, vorerst. Wird der Datenschutz wichtiger, kann ein FinTS-Adapter
+   (`lib-fints`) für einzelne Konten nachkommen; die Importschicht bleibt gleich.
+4. **Konten ohne Gegenpartei:** Die Erkennung wiederkehrender Buchungen gruppiert dann nach
+   genauem Betrag (z. B. Sparplan), siehe `src/ledger/recurring.ts`.
+
+### Hinweise für den Adapter
+
+- Manche Banken liefern Umsätze älter als 90 Tage nur **kurz nach der Zustimmung** (bei einer
+  Bank nur in den ersten 5 Minuten). Die volle Historie deshalb direkt nach dem Verknüpfen abrufen.
+- Vorzeichen nicht blind übernehmen: Für mindestens eine Bank wurden Ausgänge als positive
+  Beträge gemeldet. Maßgeblich ist das Feld für Soll/Haben (`credit_debit_indicator`).
+- Die Zustimmung läuft je Bank unterschiedlich lange (`maximum_consent_validity`); ihr Ablauf
+  muss in der App rechtzeitig sichtbar werden.
 
 ## Was unabhängig vom Anbieter schon steht (E1)
 
@@ -101,7 +119,8 @@ die Reihenfolge von 1 und 2 um. Die Importschicht hängt davon nicht ab.
 
 ## Folgen
 
-- Je gewähltem Anbieter ein Adapter, der Zugangsdaten nur aus Umgebung bzw. verschlüsselter
-  Ablage liest und zeitgesteuert abruft. Das sind eigene Aufgaben nach der Entscheidung.
+- Ein Adapter für Enable Banking (FREI-12): Anwendungs-ID und privater Schlüssel fürs JWT nur
+  aus der Umgebung, zeitgesteuerter Abruf, Verbindung und Ablauf der Zustimmung je Konto.
+- Die FinTS-Produktregistrierung entfällt (FREI-11 verworfen).
 - Ablauf der Zustimmung muss rechtzeitig auffallen (Hinweis in der App, später Benachrichtigung).
 - Vor dem ersten echten Import muss das Datenbank-Backup laufen (FREI-9).

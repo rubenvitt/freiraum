@@ -106,6 +106,6 @@ Das Repo ist öffentlich. Deshalb: keine echten Finanzdaten, Kontonamen oder Zug
 ## Offene Entscheidungen
 
 - ~~Backend-Sprache und Framework~~: TypeScript + Hono, siehe ADR 0001
-- Bankanbieter: Vorschlag in [ADR 0002](../../adr/0002-bankanbindung.md) (FinTS direkt, Enable Banking für Konten ohne FinTS), wartet auf die Prüfung der eigenen Banken
+- ~~Bankanbieter~~: Enable Banking für alle Konten, siehe [ADR 0002](../../adr/0002-bankanbindung.md)
 - Welches LLM für Vorschläge, lokal oder per API
 - Standard-Einzahlungsregel fürs Gemeinsame

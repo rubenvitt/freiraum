@@ -4,7 +4,7 @@
  *
  * Vorgehen:
  * 1. Gruppieren nach Richtung (Eingang/Ausgang) und Gegenpartei (Name, sonst IBAN, sonst
- *    Anfang des Verwendungszwecks).
+ *    Anfang des Verwendungszwecks, sonst genauer Betrag).
  * 2. Zuerst die ganze Gruppe prüfen (z. B. Strom mit schwankendem Abschlag). Passt sie nicht,
  *    Teilgruppen mit genau gleichem Betrag prüfen (z. B. ein Abo zwischen Einzelkäufen beim
  *    selben Händler).
@@ -160,13 +160,15 @@ export function counterpartyKey(name: string): string {
   return words.slice(0, 4).join(' ')
 }
 
-function groupKey(t: HistoryTransaction): { key: string; label: string } | null {
+function groupKey(t: HistoryTransaction): { key: string; label: string } {
   const name = t.counterpartyName ? counterpartyKey(t.counterpartyName) : ''
   if (name) return { key: `name:${name}`, label: t.counterpartyName?.trim() ?? name }
   if (t.counterpartyIban) return { key: `iban:${t.counterpartyIban}`, label: t.counterpartyIban }
   const purpose = t.purpose ? counterpartyKey(t.purpose) : ''
   if (purpose) return { key: `zweck:${purpose}`, label: purpose }
-  return null
+  // Manche Banken liefern per PSD2 nur Betrag und Datum (z. B. Sparpläne). Dann bleibt nur der
+  // genaue Betrag als Merkmal; der Rhythmus muss trotzdem passen.
+  return { key: `betrag:${t.amountCents}`, label: 'Ohne Gegenpartei' }
 }
 
 function median(values: number[]): number {
@@ -232,7 +234,6 @@ export function detectRecurring(
   for (const t of transactions) {
     if (t.amountCents === 0) continue
     const g = groupKey(t)
-    if (!g) continue
     const direction = t.amountCents > 0 ? 'eingang' : 'ausgang'
     const key = `${direction}|${g.key}`
     const group = groups.get(key) ?? { label: g.label, direction, items: [] }

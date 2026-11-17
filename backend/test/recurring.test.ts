@@ -259,6 +259,27 @@ describe('Wiederkehrende Buchungen erkennen', () => {
     expect(series[0]).toMatchObject({ counterparty: iban, direction: 'ausgang', occurrences: 3 })
   })
 
+  it('erkennt Serien ohne Gegenpartei am genauen Betrag (z. B. Sparplan)', () => {
+    const series = detectRecurring(
+      [
+        tx('2026-08-02', -25_000, null),
+        tx('2026-08-14', -7_310, null),
+        tx('2026-09-02', -25_000, null),
+        tx('2026-10-02', -25_000, null),
+        tx('2026-10-19', -1_240, null),
+        tx('2026-11-02', -25_000, null),
+      ],
+      '2026-11-17',
+    )
+    expect(series).toHaveLength(1)
+    expect(series[0]).toMatchObject({
+      counterparty: 'Ohne Gegenpartei',
+      cadence: 'monatlich',
+      typicalAmountCents: -25_000,
+      occurrences: 4,
+    })
+  })
+
   it('erkennt wöchentliches Taschengeld', () => {
     const dates = ['2026-10-02', '2026-10-09', '2026-10-16', '2026-10-23', '2026-10-30']
     const [series] = detectRecurring(
