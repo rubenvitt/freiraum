@@ -5,12 +5,14 @@
  * - Verfügbar im Topf = Übertrag + Zuweisung + Ausgaben des Monats (Ausgaben negativ).
  * - Übertrag = Verfügbar des Vormonats, aber nie negativ: Überziehung setzt den Topf im
  *   Folgemonat auf 0 und mindert stattdessen „Noch ohne Aufgabe“ ab dem Folgemonat.
- * - Noch ohne Aufgabe(M) = Anfangsbestand + Einnahmen bis M − Zuweisungen bis M
- *   − Zuweisungen nach M − Überziehung der Monate vor M. Geld, das in einem späteren Monat
- *   verplant ist, ist auch heute schon vergeben.
+ * - Noch ohne Aufgabe(M) = Anfangsbestand + Einnahmen bis M − Einzahlungen ins Gemeinsame bis M
+ *   − Zuweisungen bis M − Zuweisungen nach M − Überziehung der Monate vor M. Geld, das in einem
+ *   späteren Monat verplant ist, ist auch heute schon vergeben.
  * - Budgetbeginn: Daten vor dem Startmonat zählen nicht. Der Anfangsbestand (Summe der
  *   Kontostände zum Start) kommt im Startmonat in „Noch ohne Aufgabe“, ist aber keine Einnahme
  *   des Monats (zählt also nicht für Erst-ich-Anteile).
+ * - Einzahlungen ins Gemeinsame (ADR 0006) zählen nicht als negative Einnahme: Der Erst-ich-Anteil
+ *   rechnet mit den vollen Einnahmen („erst sich selbst bezahlen, dann andere“).
  */
 import { addMonthsTo, type Month, maxMonth, minMonth, monthsBetween } from './months.js'
 
@@ -30,8 +32,10 @@ export interface BudgetData {
   assignments: { potId: string; month: Month; amountCents: number; source: AssignmentSource }[]
   /** Summe der Topf-Aufteilungen je Topf und Monat (Ausgaben negativ, Erstattungen positiv). */
   activity: { potId: string; month: Month; amountCents: number }[]
-  /** Summe der Einnahme-Aufteilungen je Monat. */
+  /** Summe der Einnahme-Aufteilungen je Monat (im Gemeinsamen auch die Einzahlungen). */
   inflows: { month: Month; amountCents: number }[]
+  /** Einzahlungen von privaten Konten ins Gemeinsame je Monat (negativ). */
+  contributions?: { month: Month; amountCents: number }[]
   /**
    * Budgetbeginn: Startmonat und Anfangsbestand. Alles vor dem Startmonat wird ignoriert.
    * Fehlt er, rechnet das Budget über die gesamte Historie.
@@ -57,6 +61,8 @@ export interface MonthBudget {
   /** Anfangsbestand, nur im Startmonat (sonst 0). */
   openingBalanceCents: number
   inflowsCents: number
+  /** Einzahlungen ins Gemeinsame im Monat (negativ, nur im privaten Haushalt). */
+  contributionsCents: number
   readyToAssignCents: number
   assignedCents: number
   activityCents: number
@@ -97,6 +103,7 @@ export function firstMonth(data: BudgetData): Month | null {
     ...data.assignments.map((a) => a.month),
     ...data.activity.map((a) => a.month),
     ...data.inflows.map((i) => i.month),
+    ...(data.contributions ?? []).map((c) => c.month),
   ]
   return months.length === 0 ? null : months.reduce(minMonth)
 }
@@ -110,6 +117,7 @@ export function fromStart(data: BudgetData): BudgetData {
     assignments: data.assignments.filter((a) => a.month >= start),
     activity: data.activity.filter((a) => a.month >= start),
     inflows: data.inflows.filter((i) => i.month >= start),
+    contributions: (data.contributions ?? []).filter((c) => c.month >= start),
   }
 }
 
@@ -119,6 +127,7 @@ function emptyMonth(data: BudgetData, month: Month): MonthBudget {
     month,
     openingBalanceCents: 0,
     inflowsCents: 0,
+    contributionsCents: 0,
     readyToAssignCents: 0,
     assignedCents: 0,
     activityCents: 0,
@@ -150,6 +159,10 @@ export function computeMonth(all: BudgetData, month: Month): MonthBudget {
   }
   const inflows = new Map<Month, number>()
   for (const i of data.inflows) inflows.set(i.month, (inflows.get(i.month) ?? 0) + i.amountCents)
+  const contributions = new Map<Month, number>()
+  for (const c of data.contributions ?? []) {
+    contributions.set(c.month, (contributions.get(c.month) ?? 0) + c.amountCents)
+  }
 
   // Vor den ersten Daten ändert sich nichts; die Rechnung darf dort beginnen.
   const first = firstMonth(data) ?? month
@@ -192,7 +205,7 @@ export function computeMonth(all: BudgetData, month: Month): MonthBudget {
         })
       }
     }
-    inflowsUpTo += inflows.get(m) ?? 0
+    inflowsUpTo += (inflows.get(m) ?? 0) + (contributions.get(m) ?? 0)
     assignedUpTo += monthAssigned
     if (isTarget) {
       result = rows
@@ -210,6 +223,7 @@ export function computeMonth(all: BudgetData, month: Month): MonthBudget {
     month,
     openingBalanceCents: month === startMonth ? opening : 0,
     inflowsCents: inflows.get(month) ?? 0,
+    contributionsCents: contributions.get(month) ?? 0,
     readyToAssignCents: opening + inflowsUpTo - assignedUpTo - assignedInFuture - overspentBefore,
     assignedCents: monthAssigned,
     activityCents: monthActivity,

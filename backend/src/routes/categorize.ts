@@ -3,7 +3,7 @@ import type { AppEnv } from '../app.js'
 import { requireAuth } from '../auth/middleware.js'
 import type { Rule } from '../categorize/rules.js'
 import { Cents, error, IsoDate, json, pathId } from './common.js'
-import { SplitKind, SplitSchema, TransactionSchema } from './ledger.js'
+import { SplitInputSchema, SplitKind, TransactionSchema } from './ledger.js'
 
 const Iban = z
   .string()
@@ -27,6 +27,7 @@ const RuleSchema = z
     maxAmountCents: z.number().int().nullable(),
     kind: SplitKind,
     potId: z.uuid().nullable(),
+    personId: z.uuid().nullable(),
     origin: z.enum(['korrektur', 'manuell']),
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
@@ -44,6 +45,15 @@ const RuleInputSchema = z
     maxAmountCents: Cents.optional(),
     kind: SplitKind,
     potId: z.uuid().nullable().default(null),
+    personId: z
+      .uuid()
+      .nullable()
+      .default(null)
+      .openapi({
+        description:
+          'nur bei einzahlung und ausgleich im gemeinsamen Haushalt; die Richtung ergibt sich dann ' +
+          'aus der Art',
+      }),
   })
   .openapi('RuleInput')
 
@@ -93,7 +103,7 @@ const setSplits = createRoute({
   summary: 'Aufteilung festlegen (korrigieren) und bestätigen',
   description:
     'Die Summe der Aufteilungen muss dem Buchungsbetrag entsprechen; Töpfe kommen aus dem ' +
-    'Haushalt des Kontos. Weicht eine einfache Zuordnung vom Vorschlag ab, entsteht eine Regel ' +
+    'Haushalt des Kontos, bei privaten Konten auch aus dem gemeinsamen (Ausgleich). Weicht eine einfache Zuordnung vom Vorschlag ab, entsteht eine Regel ' +
     'für die Gegenpartei (außer learn = false), und offene Buchungen werden neu vorgeschlagen.',
   security: [{ bearerAuth: [] }],
   middleware: [requireAuth] as const,
@@ -101,7 +111,7 @@ const setSplits = createRoute({
     params: transactionParams,
     body: json(
       z.object({
-        splits: z.array(SplitSchema).min(1).max(50),
+        splits: z.array(SplitInputSchema).min(1).max(50),
         learn: z.boolean().default(true),
       }),
       'Aufteilung',
@@ -122,7 +132,7 @@ const setSplits = createRoute({
     400: error('Ungültige Anfrage'),
     401: error('Nicht angemeldet'),
     404: error('Buchung nicht gefunden (oder kein Zugriff)'),
-    422: error('Summe falsch oder Topf aus anderem Haushalt'),
+    422: error('Summe falsch, Topf aus anderem Haushalt oder Richtung/Person unpassend'),
   },
 })
 

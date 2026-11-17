@@ -2,7 +2,9 @@
  * Töpfe, Zuweisungen, Monatsabschluss und Erst-ich-Automatik.
  *
  * Zugriff wird hier durchgesetzt: Nur Mitglieder eines Haushalts sehen und ändern seine Töpfe
- * und sein Budget. Fremde Haushalte und Töpfe sind „nicht gefunden“ (404).
+ * und sein Budget. Fremde Haushalte und Töpfe sind „nicht gefunden“ (404). Einzige Ausnahme:
+ * Hat die Inhaberin eines privaten Haushalts der anderen Person die Sicht `budget` freigegeben
+ * (ADR 0006), darf diese Töpfe und Budget lesen, aber nichts ändern.
  *
  * Schreibende Vorgänge sperren die Haushaltszeile (`for update`), damit die Prüfung von
  * „Noch ohne Aufgabe ≥ 0“ nicht durch parallele Änderungen unterlaufen wird. Sperrreihenfolge
@@ -180,6 +182,24 @@ export class BudgetService {
     if (!row) throw householdNotFound()
   }
 
+  /**
+   * Lesender Zugriff: Mitglied, oder der Haushalt ist privat und die Inhaberin hat der Person die
+   * Sicht `budget` freigegeben. Sonst 404.
+   */
+  async householdReadAccess(sql: Sql, personId: string, householdId: string): Promise<void> {
+    const [row] = await sql<{ id: string }[]>`
+      select h.id from households h
+      where h.id = ${householdId}
+        and (exists (select 1 from household_members m
+                     where m.household_id = h.id and m.person_id = ${personId})
+             or (h.kind = 'privat' and exists (
+                   select 1 from shares s
+                   where s.owner_person_id = h.owner_person_id
+                     and s.grantee_person_id = ${personId} and s.scope = 'budget')))
+    `
+    if (!row) throw householdNotFound()
+  }
+
   private async lockHousehold(tx: TransactionSql, householdId: string): Promise<void> {
     await tx`select id from households where id = ${householdId} for update`
   }
@@ -211,7 +231,7 @@ export class BudgetService {
   // --- Töpfe -------------------------------------------------------------------
 
   async listPots(personId: string, householdId: string, includeArchived = false): Promise<Pot[]> {
-    await this.householdAccess(this.db, personId, householdId)
+    await this.householdReadAccess(this.db, personId, householdId)
     const rows = await this.db<PotRow[]>`
       select ${this.db.unsafe(POT_COLUMNS)} from pots
       where household_id = ${householdId}
@@ -357,12 +377,23 @@ export class BudgetService {
       where s.kind = 'topf' and p.household_id = ${householdId}
       group by 1, 2
     `
+    // Einnahmen; im Gemeinsamen zählen Einzahlungen der Personen dazu (positiv). Einzahlungen
+    // von privaten Konten (negativ) mindern „Noch ohne Aufgabe“ getrennt (ADR 0006).
     const inflows = await sql<{ month: string; amount_cents: string }[]>`
       select to_char(t.booking_date, 'YYYY-MM') as month, sum(s.amount_cents) as amount_cents
       from transaction_splits s
       join transactions t on t.id = s.transaction_id
       join accounts a on a.id = t.account_id
-      where s.kind = 'einnahme' and a.household_id = ${householdId}
+      where a.household_id = ${householdId}
+        and (s.kind = 'einnahme' or (s.kind = 'einzahlung' and s.amount_cents > 0))
+      group by 1
+    `
+    const contributions = await sql<{ month: string; amount_cents: string }[]>`
+      select to_char(t.booking_date, 'YYYY-MM') as month, sum(s.amount_cents) as amount_cents
+      from transaction_splits s
+      join transactions t on t.id = s.transaction_id
+      join accounts a on a.id = t.account_id
+      where a.household_id = ${householdId} and s.kind = 'einzahlung' and s.amount_cents < 0
       group by 1
     `
     return {
@@ -386,6 +417,10 @@ export class BudgetService {
         amountCents: cents(a.amount_cents),
       })),
       inflows: inflows.map((i) => ({ month: i.month, amountCents: cents(i.amount_cents) })),
+      contributions: contributions.map((c) => ({
+        month: c.month,
+        amountCents: cents(c.amount_cents),
+      })),
       start: { month: start.month, openingBalanceCents: start.openingBalanceCents },
     }
   }
@@ -650,7 +685,7 @@ export class BudgetService {
   }
 
   async getMonth(personId: string, householdId: string, month: Month): Promise<BudgetMonthView> {
-    await this.householdAccess(this.db, personId, householdId)
+    await this.householdReadAccess(this.db, personId, householdId)
     return this.view(this.db, householdId, month)
   }
 

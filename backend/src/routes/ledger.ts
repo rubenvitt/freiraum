@@ -73,29 +73,49 @@ const ImportResultSchema = z
   })
   .openapi('ImportResult')
 
-export const SplitKind = z.enum(['topf', 'einnahme', 'umbuchung']).openapi({
+export const SplitKind = z
+  .enum(['topf', 'einnahme', 'umbuchung', 'einzahlung', 'ausgleich'])
+  .openapi({
+    description:
+      'topf = Ausgabe oder Erstattung eines Topfs (von privaten Konten auch ein Topf des ' +
+      'gemeinsamen Haushalts, daraus entsteht ein Ausgleich); einnahme = fließt in „Noch ohne ' +
+      'Aufgabe“; umbuchung = zwischen eigenen Konten desselben Haushalts, ohne Wirkung aufs ' +
+      'Budget; einzahlung = vom privaten aufs gemeinsame Konto (privat ein Ausgang, gemeinsam ' +
+      'ein Eingang); ausgleich = Erstattung einer privat bezahlten gemeinsamen Ausgabe (gemeinsam ' +
+      'ein Ausgang, privat ein Eingang), ohne Wirkung aufs Budget',
+  })
+
+const SplitPersonId = z.uuid().nullable().openapi({
   description:
-    'topf = Ausgabe oder Erstattung eines Topfs; einnahme = fließt in „Noch ohne Aufgabe“; ' +
-    'umbuchung = zwischen eigenen Konten desselben Haushalts, ohne Wirkung aufs Budget',
+    'nur bei einzahlung und ausgleich auf gemeinsamen Konten: von wem bzw. an wen das Geld geht',
 })
 
 export const SplitSchema = z
   .object({
     kind: SplitKind,
-    potId: z
-      .uuid()
-      .nullable()
-      .default(null)
-      .openapi({ description: 'nur bei kind = topf; fehlt = null' }),
+    potId: z.uuid().nullable().openapi({ description: 'nur bei kind = topf' }),
+    personId: SplitPersonId,
     amountCents: Cents,
   })
   .openapi('Split')
 
+export const SplitInputSchema = SplitSchema.extend({
+  potId: z
+    .uuid()
+    .nullable()
+    .default(null)
+    .openapi({ description: 'nur bei kind = topf; fehlt = null' }),
+  personId: SplitPersonId.default(null),
+}).openapi('SplitInput')
+
 export const SuggestionSchema = z
   .object({
-    source: z.enum(['regel', 'llm']),
+    source: z.enum(['regel', 'abgleich', 'llm']).openapi({
+      description: 'abgleich = Überweisung zwischen eigenen Konten, über die IBAN erkannt',
+    }),
     kind: SplitKind,
     potId: z.uuid().nullable(),
+    personId: z.uuid().nullable(),
     confidencePct: z.number().int().min(0).max(100),
     reason: z.string().openapi({ description: 'Begründung in einem Satz' }),
     ruleId: z.uuid().nullable(),
