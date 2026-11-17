@@ -103,6 +103,7 @@ describe('Regeln (rein)', () => {
     kind: 'einnahme',
     potId: null,
     personId: null,
+    counterAccountId: null,
     origin: 'manuell',
     createdAt: new Date(0),
     updatedAt: new Date(0),
@@ -286,7 +287,13 @@ describe('Bestätigen und korrigieren', () => {
     )
     expect(withoutPotId.status).toBe(200)
     expect((await body(withoutPotId)).transaction.splits).toEqual([
-      { kind: 'umbuchung', potId: null, personId: null, amountCents: -5_000 },
+      {
+        kind: 'umbuchung',
+        potId: null,
+        personId: null,
+        counterAccountId: null,
+        amountCents: -5_000,
+      },
     ])
 
     const ok = await body(

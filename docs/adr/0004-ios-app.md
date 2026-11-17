@@ -60,7 +60,31 @@ Anmeldung in der App, Barausgaben im Backend, Weg der Benachrichtigung und was d
   Einnahmen).
 - Fehlt im Haushalt ein Bargeldkonto, legt die App beim ersten Erfassen eins an („Bargeld“).
 - Eine Abhebung am Automaten ordnet man als **Umbuchung** zu; erst die erfassten Barausgaben
-  belasten Töpfe. Den Bargeldbestand („50 € noch nicht erfasst“) zeigt die App noch nicht.
+  belasten Töpfe.
+
+### Bargeldbestand (FREI-24)
+
+- Eine Umbuchung kann ihr **Gegenkonto** nennen (`counterAccountId` an Aufteilung, Regel und
+  Vorschlag; nur bei `umbuchung`, nur ein Konto desselben Haushalts, nie das Konto selbst; die
+  Datenbank prüft das per Constraint-Trigger). Eine Abhebung bucht man so „ins Bargeld“.
+- **Bestand je Bargeldkonto** = Zugänge − erfasste Ausgaben, genauer: −Summe der Umbuchungen
+  anderer Konten mit diesem Konto als Gegenkonto plus Summe der Buchungen des Bargeldkontos
+  selbst. Vorgeschlagene Umbuchungen zählen schon mit (wie im Budget). `GET /v1/accounts` liefert
+  ihn als `unrecordedCashCents` (bei anderen Konten `null`). Negativ heißt: mehr erfasst als
+  abgehoben (z. B. Bargeld aus der Zeit vor Freiraum); die App zeigt dann nichts.
+- Das Budget bleibt unberührt: Umbuchungen sind neutral, nur erfasste Barausgaben belasten Töpfe.
+- Wer eine Abhebung ins Bargeld bucht, lernt eine Regel **mit** Gegenkonto; die nächste Abhebung
+  derselben Gegenpartei kommt gleich so als Vorschlag. Der IBAN-Abgleich setzt das Gegenkonto
+  bei Überweisungen zwischen eigenen Konten ebenfalls.
+- Verworfen: Bestand allein aus Umbuchungen ohne Gegenkonto ableiten (z. B. „Umbuchung ohne
+  passende IBAN = Bargeld“). Eine Umbuchung aufs nicht angelegte Sparkonto sähe genauso aus.
+- App: Erkennt die Bestätigen-Karte eine Abhebung (Wörter wie „Bargeld“, „Geldautomat“), bietet
+  sie „Ins Bargeld buchen“ an (legt bei Bedarf das Bargeldkonto an). Danach erinnert sie „Denk an
+  die 50 € Bargeld“; die Übersicht zeigt „30 € Bargeld noch nicht erfasst“ und öffnet von dort
+  die Barausgabe.
+- Vertrag: `SplitInput` ist ein eigenständiges Objekt statt einer Erweiterung von `Split`. Die
+  Erweiterung wurde im Vertrag ein `allOf`, das der Swift-Client als Verschachtelung
+  (`value1`/`value2`) erzeugt; jedes neue Feld hätte dort zweimal gesetzt werden müssen.
 
 ### Benachrichtigung „Buchungen warten“: lokal per Hintergrundabruf
 
@@ -93,6 +117,6 @@ Anmeldung in der App, Barausgaben im Backend, Weg der Benachrichtigung und was d
 - Wer `openapi/openapi.yaml` ändert, sieht Brüche im Swift-Client in der CI (Job „FreiraumKit“).
 - Für die erste Anmeldung muss `APPLE_APP_IDS` auf dem Server gesetzt sein, sonst lehnt iOS den
   Passkey ab.
-- Offen: Push über APNs, Bargeldbestand, Töpfe in der App anlegen und bearbeiten, Widget für den
+- Offen: Push über APNs, Töpfe in der App anlegen und bearbeiten, Widget für den
   gemeinsamen Haushalt (Auswahl per App Intent), helles Erscheinungsbild. Paar-Funktionen
   (Freigaben, Ausgleich) kommen mit E4.

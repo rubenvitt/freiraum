@@ -391,6 +391,11 @@ components:
             - date
             - source
           description: Bekannter Kontostand, Grundlage des Anfangsbestands im Budget
+        unrecordedCashCents:
+          type:
+            - integer
+            - "null"
+          description: "nur bei source = bar: abgehobenes Bargeld, für das noch keine Ausgaben erfasst sind (Umbuchungen mit diesem Konto als Gegenkonto plus Buchungen des Kontos). Negativ, wenn mehr erfasst als abgehoben wurde. Sonst null."
       required:
         - id
         - householdId
@@ -401,6 +406,7 @@ components:
         - createdAt
         - lastImportAt
         - balance
+        - unrecordedCashCents
     ImportResult:
       type: object
       properties:
@@ -568,6 +574,12 @@ components:
             - "null"
           format: uuid
           description: "nur bei einzahlung und ausgleich auf gemeinsamen Konten: von wem bzw. an wen das Geld geht"
+        counterAccountId:
+          type:
+            - string
+            - "null"
+          format: uuid
+          description: "nur bei umbuchung: Gegenkonto im selben Haushalt, z. B. das Bargeldkonto bei einer Abhebung (zählt dann im Bargeldbestand); null = unbekannt"
         amountCents:
           type: integer
           minimum: -100000000000
@@ -578,6 +590,7 @@ components:
         - kind
         - potId
         - personId
+        - counterAccountId
         - amountCents
     Suggestion:
       type:
@@ -610,6 +623,11 @@ components:
             - string
             - "null"
           format: uuid
+        counterAccountId:
+          type:
+            - string
+            - "null"
+          format: uuid
         confidencePct:
           type: integer
           minimum: 0
@@ -627,6 +645,7 @@ components:
         - kind
         - potId
         - personId
+        - counterAccountId
         - confidencePct
         - reason
         - ruleId
@@ -999,6 +1018,11 @@ components:
             - string
             - "null"
           format: uuid
+        counterAccountId:
+          type:
+            - string
+            - "null"
+          format: uuid
         origin:
           type: string
           enum:
@@ -1023,29 +1047,53 @@ components:
         - kind
         - potId
         - personId
+        - counterAccountId
         - origin
         - createdAt
         - updatedAt
       description: aus der Korrektur entstandene Regel
     SplitInput:
-      allOf:
-        - $ref: "#/components/schemas/Split"
-        - type: object
-          properties:
-            potId:
-              type:
-                - string
-                - "null"
-              format: uuid
-              default: null
-              description: nur bei kind = topf; fehlt = null
-            personId:
-              type:
-                - string
-                - "null"
-              format: uuid
-              default: null
-              description: "nur bei einzahlung und ausgleich auf gemeinsamen Konten: von wem bzw. an wen das Geld geht"
+      type: object
+      properties:
+        kind:
+          type: string
+          enum:
+            - topf
+            - einnahme
+            - umbuchung
+            - einzahlung
+            - ausgleich
+          description: topf = Ausgabe oder Erstattung eines Topfs (von privaten Konten auch ein Topf des gemeinsamen Haushalts, daraus entsteht ein Ausgleich); einnahme = fließt in „Noch ohne Aufgabe“; umbuchung = zwischen eigenen Konten desselben Haushalts, ohne Wirkung aufs Budget; einzahlung = vom privaten aufs gemeinsame Konto (privat ein Ausgang, gemeinsam ein Eingang); ausgleich = Erstattung einer privat bezahlten gemeinsamen Ausgabe (gemeinsam ein Ausgang, privat ein Eingang), ohne Wirkung aufs Budget
+        potId:
+          type:
+            - string
+            - "null"
+          format: uuid
+          default: null
+          description: nur bei kind = topf; fehlt = null
+        personId:
+          type:
+            - string
+            - "null"
+          format: uuid
+          default: null
+          description: "nur bei einzahlung und ausgleich auf gemeinsamen Konten: von wem bzw. an wen das Geld geht"
+        counterAccountId:
+          type:
+            - string
+            - "null"
+          format: uuid
+          default: null
+          description: "nur bei umbuchung: Gegenkonto im selben Haushalt, z. B. das Bargeldkonto bei einer Abhebung (zählt dann im Bargeldbestand); null = unbekannt"
+        amountCents:
+          type: integer
+          minimum: -100000000000
+          maximum: 100000000000
+          description: Betrag in Cent; negativ = Ausgang
+          example: -1299
+      required:
+        - kind
+        - amountCents
     RuleInput:
       type: object
       properties:
@@ -1102,6 +1150,13 @@ components:
           format: uuid
           default: null
           description: nur bei einzahlung und ausgleich im gemeinsamen Haushalt; die Richtung ergibt sich dann aus der Art
+        counterAccountId:
+          type:
+            - string
+            - "null"
+          format: uuid
+          default: null
+          description: "nur bei umbuchung: Gegenkonto im selben Haushalt, z. B. das Bargeldkonto bei einer Abhebung (zählt dann im Bargeldbestand); null = unbekannt"
       required:
         - kind
     Share:

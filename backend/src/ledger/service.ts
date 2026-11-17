@@ -36,6 +36,12 @@ export interface Account {
   lastImportAt: Date | null
   /** Bekannter Kontostand am Ende von `date` (Grundlage des Anfangsbestands, ADR 0003). */
   balance: { cents: number; date: IsoDate; source: 'manuell' | 'anbieter' } | null
+  /**
+   * Nur Bargeldkonten: abgehobenes Bargeld, für das noch keine Ausgaben erfasst sind (ADR 0004).
+   * Zugänge sind Umbuchungen anderer Konten mit diesem Konto als Gegenkonto, abgezogen werden die
+   * Buchungen des Kontos selbst (erfasste Barausgaben). Sonst `null`.
+   */
+  unrecordedCashCents: number | null
 }
 
 export interface Transaction {
@@ -115,6 +121,7 @@ interface AccountRow {
   balance_cents: string | null
   balance_day: string | null
   balance_source: 'manuell' | 'anbieter' | null
+  unrecorded_cash_cents: string | null
 }
 
 const ACCOUNT_BALANCE = 'balance_date::text as balance_day'
@@ -132,7 +139,19 @@ const toAccount = (r: AccountRow): Account => ({
     r.balance_cents === null || r.balance_day === null || r.balance_source === null
       ? null
       : { cents: cents(r.balance_cents), date: r.balance_day, source: r.balance_source },
+  unrecordedCashCents: r.unrecorded_cash_cents === null ? null : cents(r.unrecorded_cash_cents),
 })
+
+/**
+ * Bargeldbestand eines Kontos `a` als SQL-Ausdruck: Zugänge aus Umbuchungen (bei der Abhebung
+ * negativ, deshalb mit umgekehrtem Vorzeichen) plus die Buchungen des Bargeldkontos selbst.
+ * Die Umbuchungen liegen per Datenbankprüfung immer im selben Haushalt wie `a`.
+ */
+const UNRECORDED_CASH = `case when a.source = 'bar' then
+    coalesce((select -sum(s.amount_cents) from transaction_splits s
+              where s.counter_account_id = a.id and s.kind = 'umbuchung'), 0)
+  + coalesce((select sum(t.amount_cents) from transactions t where t.account_id = a.id), 0)
+  end as unrecorded_cash_cents`
 
 interface SeriesRow {
   id: string
@@ -232,7 +251,8 @@ export class LedgerService {
     const [row] = await this.db<AccountRow[]>`
       insert into accounts (household_id, name, source, iban)
       values (${input.householdId}, ${input.name.trim()}, ${input.source}, ${iban})
-      returning *, ${this.db.unsafe(ACCOUNT_BALANCE)}, null::timestamptz as last_import_at
+      returning *, ${this.db.unsafe(ACCOUNT_BALANCE)}, null::timestamptz as last_import_at,
+        case when source = 'bar' then 0 end as unrecorded_cash_cents
     `
     if (!row) throw new Error('Konto konnte nicht angelegt werden')
     return toAccount(row)
@@ -241,7 +261,7 @@ export class LedgerService {
   async listAccounts(personId: string): Promise<Account[]> {
     const rows = await this.db<AccountRow[]>`
       select a.*, ${this.db.unsafe(`a.${ACCOUNT_BALANCE}`)}, (select max(r.created_at) from import_runs r where r.account_id = a.id)
-               as last_import_at
+               as last_import_at, ${this.db.unsafe(UNRECORDED_CASH)}
       from accounts a
       join household_members m on m.household_id = a.household_id and m.person_id = ${personId}
       order by a.created_at

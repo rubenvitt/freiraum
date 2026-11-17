@@ -78,7 +78,7 @@ Kriterien: alle eigenen Banken abgedeckt, Kosten, Aufwand der regelmäßigen Zus
 1. Regeln greifen zuerst.
 2. Ohne Treffer schlägt ein LLM Topf und Haushalt vor, mit Begründung.
 3. Die Person bestätigt auf dem iPhone mit einem Tipp; Korrekturen werden zu neuen Regeln.
-4. Bargeld: Abhebung wird als „Bargeld, noch nicht erfasst“ markiert, bis Barausgaben dagegen gebucht sind. Stand E3: Abhebung als Umbuchung zuordnen, Barausgaben im Bargeldkonto erfassen (ADR 0004); den offenen Bestand zeigt die App noch nicht.
+4. Bargeld: Abhebung wird als „Bargeld, noch nicht erfasst“ markiert, bis Barausgaben dagegen gebucht sind. Umgesetzt als Umbuchung ins Bargeldkonto (Gegenkonto); der Bestand je Bargeldkonto ist Zugänge minus erfasste Barausgaben, die App zeigt ihn in der Übersicht und erinnert nach dem Bestätigen (ADR 0004).
 
 ## Auswertungen
 

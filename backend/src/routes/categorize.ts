@@ -3,7 +3,7 @@ import type { AppEnv } from '../app.js'
 import { requireAuth } from '../auth/middleware.js'
 import type { Rule } from '../categorize/rules.js'
 import { Cents, error, IsoDate, json, pathId } from './common.js'
-import { SplitInputSchema, SplitKind, TransactionSchema } from './ledger.js'
+import { CounterAccountId, SplitInputSchema, SplitKind, TransactionSchema } from './ledger.js'
 
 const Iban = z
   .string()
@@ -28,6 +28,7 @@ const RuleSchema = z
     kind: SplitKind,
     potId: z.uuid().nullable(),
     personId: z.uuid().nullable(),
+    counterAccountId: z.uuid().nullable(),
     origin: z.enum(['korrektur', 'manuell']),
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
@@ -54,6 +55,7 @@ const RuleInputSchema = z
           'nur bei einzahlung und ausgleich im gemeinsamen Haushalt; die Richtung ergibt sich dann ' +
           'aus der Art',
       }),
+    counterAccountId: CounterAccountId.default(null),
   })
   .openapi('RuleInput')
 

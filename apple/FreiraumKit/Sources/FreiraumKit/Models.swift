@@ -39,12 +39,16 @@ public struct Account: Hashable, Sendable, Codable, Identifiable {
     public let householdId: String
     public let name: String
     public let source: Source
+    /// Nur Bargeldkonten: abgehobenes Bargeld, für das noch keine Ausgaben erfasst sind.
+    /// Negativ, wenn mehr erfasst als abgehoben wurde.
+    public let unrecordedCashCents: Int?
 
-    public init(id: String, householdId: String, name: String, source: Source) {
+    public init(id: String, householdId: String, name: String, source: Source, unrecordedCashCents: Int? = nil) {
         self.id = id
         self.householdId = householdId
         self.name = name
         self.source = source
+        self.unrecordedCashCents = unrecordedCashCents
     }
 }
 
@@ -145,13 +149,17 @@ public struct BudgetMonth: Hashable, Sendable, Codable {
 }
 
 /// Ziel einer Aufteilung: ein Topf, „Einnahme“ (fließt in „Noch ohne Aufgabe“), „Umbuchung“
-/// (zwischen eigenen Konten, ohne Wirkung aufs Budget), Einzahlung ins Gemeinsame oder Ausgleich
-/// zwischen privatem und gemeinsamem Konto. Bei Einzahlung und Ausgleich nennt `personId` auf
-/// gemeinsamen Konten, von wem bzw. an wen das Geld geht; auf privaten Konten ist sie leer.
+/// (zwischen eigenen Konten, ohne Wirkung aufs Budget, mit oder ohne Gegenkonto), Einzahlung ins
+/// Gemeinsame oder Ausgleich zwischen privatem und gemeinsamem Konto. Eine Abhebung mit dem
+/// Bargeldkonto als Gegenkonto zählt im Bargeldbestand. Bei Einzahlung und Ausgleich nennt
+/// `personId` auf gemeinsamen Konten, von wem bzw. an wen das Geld geht; auf privaten Konten ist
+/// sie leer.
 public enum SplitTarget: Hashable, Sendable, Codable {
     case pot(String)
     case income
     case transfer
+    /// Umbuchung auf ein eigenes Konto desselben Haushalts (Konto-ID), z. B. ins Bargeld
+    case transferTo(String)
     case contribution(personId: String?)
     case settlement(personId: String?)
 }

@@ -42,6 +42,16 @@ const AccountSchema = z
       })
       .nullable()
       .openapi({ description: 'Bekannter Kontostand, Grundlage des Anfangsbestands im Budget' }),
+    unrecordedCashCents: z
+      .number()
+      .int()
+      .nullable()
+      .openapi({
+        description:
+          'nur bei source = bar: abgehobenes Bargeld, für das noch keine Ausgaben erfasst sind ' +
+          '(Umbuchungen mit diesem Konto als Gegenkonto plus Buchungen des Kontos). Negativ, wenn ' +
+          'mehr erfasst als abgehoben wurde. Sonst null.',
+      }),
   })
   .openapi('Account')
 
@@ -90,23 +100,40 @@ const SplitPersonId = z.uuid().nullable().openapi({
     'nur bei einzahlung und ausgleich auf gemeinsamen Konten: von wem bzw. an wen das Geld geht',
 })
 
+export const CounterAccountId = z
+  .uuid()
+  .nullable()
+  .openapi({
+    description:
+      'nur bei umbuchung: Gegenkonto im selben Haushalt, z. B. das Bargeldkonto bei einer ' +
+      'Abhebung (zählt dann im Bargeldbestand); null = unbekannt',
+  })
+
 export const SplitSchema = z
   .object({
     kind: SplitKind,
     potId: z.uuid().nullable().openapi({ description: 'nur bei kind = topf' }),
     personId: SplitPersonId,
+    counterAccountId: CounterAccountId,
     amountCents: Cents,
   })
   .openapi('Split')
 
-export const SplitInputSchema = SplitSchema.extend({
-  potId: z
-    .uuid()
-    .nullable()
-    .default(null)
-    .openapi({ description: 'nur bei kind = topf; fehlt = null' }),
-  personId: SplitPersonId.default(null),
-}).openapi('SplitInput')
+// Eigenständiges Objekt statt `SplitSchema.extend`: Das würde im Vertrag ein `allOf`, und der
+// Swift-Client bekäme statt eines einfachen Typs eine Verschachtelung (ADR 0004).
+export const SplitInputSchema = z
+  .object({
+    kind: SplitKind,
+    potId: z
+      .uuid()
+      .nullable()
+      .default(null)
+      .openapi({ description: 'nur bei kind = topf; fehlt = null' }),
+    personId: SplitPersonId.default(null),
+    counterAccountId: CounterAccountId.default(null),
+    amountCents: Cents,
+  })
+  .openapi('SplitInput')
 
 export const SuggestionSchema = z
   .object({
@@ -116,6 +143,7 @@ export const SuggestionSchema = z
     kind: SplitKind,
     potId: z.uuid().nullable(),
     personId: z.uuid().nullable(),
+    counterAccountId: z.uuid().nullable(),
     confidencePct: z.number().int().min(0).max(100),
     reason: z.string().openapi({ description: 'Begründung in einem Satz' }),
     ruleId: z.uuid().nullable(),

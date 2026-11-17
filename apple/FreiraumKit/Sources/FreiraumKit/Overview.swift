@@ -42,8 +42,11 @@ public struct OverviewState: Hashable, Sendable {
     /// Töpfe, denen laut Plan noch Geld fehlt (für „Verteilen“)
     public let neededCents: Int
     public let closed: Bool
+    /// „30 € Bargeld noch nicht erfasst“; nil, wenn nichts offen ist
+    public let cashHint: String?
 
-    public init(budget: BudgetMonth, household: Household, pots: [Pot], pendingCount: Int) {
+    /// - Parameter unrecordedCashCents: Bargeldbestand des Haushalts (`CashText.unrecordedCents`)
+    public init(budget: BudgetMonth, household: Household, pots: [Pot], pendingCount: Int, unrecordedCashCents: Int = 0) {
         let info = Dictionary(pots.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let order = Dictionary(pots.map { ($0.id, $0.sortOrder) }, uniquingKeysWith: { a, _ in a })
         let visible = budget.pots
@@ -56,6 +59,7 @@ public struct OverviewState: Hashable, Sendable {
         readyToAssign = Money.number(budget.readyToAssignCents)
         self.pendingCount = pendingCount
         closed = budget.closed
+        cashHint = CashText.unrecorded(unrecordedCashCents)
 
         let erst = visible.filter { $0.kind == .erstIch }
         erstIch = erst.map {

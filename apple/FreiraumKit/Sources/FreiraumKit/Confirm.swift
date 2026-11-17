@@ -23,10 +23,21 @@ public struct ConfirmCard: Hashable, Sendable, Identifiable {
     public let note: String?
     /// „Passt“ geht nur mit Vorschlag
     public let canConfirm: Bool
+    /// Sieht nach einer Abhebung am Automaten aus
+    public let isWithdrawal: Bool
+    /// Abhebung, die noch nicht ins Bargeld gebucht ist: die App bietet „Ins Bargeld“ an
+    public let offersCash: Bool
 
-    /// Ohne Wissen über andere Haushalte (z. B. im Test): nur die Töpfe des Kontos.
-    public init(transaction t: Transaction, account: Account?, household: Household?, pots: [Pot], today: String? = nil) {
-        self.init(transaction: t, account: account, context: TargetContext(household: household, pots: pots), today: today)
+    /// Ohne Wissen über andere Haushalte (z. B. im Test): nur die Töpfe und Konten des Haushalts.
+    /// - Parameter accounts: Konten des Haushalts (für Namen von Gegenkonten und das Bargeldkonto)
+    public init(
+        transaction t: Transaction, account: Account?, household: Household?, pots: [Pot],
+        accounts: [Account] = [], today: String? = nil
+    ) {
+        self.init(
+            transaction: t, account: account,
+            context: TargetContext(household: household, pots: pots, accounts: accounts), today: today
+        )
     }
 
     public init(transaction t: Transaction, account: Account?, context: TargetContext, today: String? = nil) {
@@ -49,12 +60,29 @@ public struct ConfirmCard: Hashable, Sendable, Identifiable {
             confidence = nil
         }
         canConfirm = t.status == .vorgeschlagen && t.suggestion != nil
-        let text = "\(t.counterpartyName ?? "") \(t.purpose ?? "")".lowercased()
-        if t.amountCents < 0 && (text.contains("bargeld") || text.contains("geldautomat") || text.contains("auszahlung")) {
-            note = "Bargeld ist noch keine Ausgabe: als Umbuchung zuordnen und Ausgaben mit dem Plus erfassen."
+        let withdrawal = ConfirmCard.looksLikeWithdrawal(t)
+        let cashIds = Set(context.cashAccounts.map(\.id))
+        var bookedAsCash = false
+        if case let .transferTo(id)? = t.suggestion?.target {
+            bookedAsCash = cashIds.contains(id)
+        }
+        let offers = withdrawal && !bookedAsCash
+        isWithdrawal = withdrawal
+        offersCash = offers
+        if offers {
+            note = "Bargeld ist noch keine Ausgabe: ins Bargeld buchen und Ausgaben später mit dem Plus erfassen."
+        } else if withdrawal {
+            note = "Zählt als Bargeld, bis du Ausgaben mit dem Plus erfasst."
         } else {
             note = nil
         }
+    }
+
+    /// Abhebung am Automaten: ein Ausgang mit typischen Wörtern in Gegenpartei oder Zweck.
+    public static func looksLikeWithdrawal(_ t: Transaction) -> Bool {
+        guard t.amountCents < 0 else { return false }
+        let text = "\(t.counterpartyName ?? "") \(t.purpose ?? "")".lowercased()
+        return ["bargeld", "geldautomat", "auszahlung", "abhebung"].contains { text.contains($0) }
     }
 }
 
@@ -75,18 +103,27 @@ public struct TargetContext: Hashable, Sendable {
     /// Mitglieder des gemeinsamen Haushalts (für Einzahlung und Ausgleich)
     public let sharedMembers: [Person]
     public let me: Person?
+    /// Konten des Haushalts (für Namen von Gegenkonten und „Ins Bargeld“)
+    public let accounts: [Account]
 
-    public init(household: Household?, pots: [Pot], crossPots: [Pot] = [], sharedMembers: [Person] = [], me: Person? = nil) {
+    public init(
+        household: Household?, pots: [Pot], crossPots: [Pot] = [], sharedMembers: [Person] = [], me: Person? = nil,
+        accounts: [Account] = []
+    ) {
         self.household = household
         self.pots = pots
         self.crossPots = crossPots
         self.sharedMembers = sharedMembers
         self.me = me
+        self.accounts = accounts
     }
 
     /// Kontext für ein Konto aus allem, was die App geladen hat.
     /// - Parameter pots: Töpfe je Haushalts-ID
-    public init(household: Household?, households: [Household], pots: [String: [Pot]], me: Person?) {
+    /// - Parameter accounts: Konten des Haushalts, zu dem das Konto gehört
+    public init(
+        household: Household?, households: [Household], pots: [String: [Pot]], me: Person?, accounts: [Account] = []
+    ) {
         let shared = households.filter { $0.kind == .gemeinsam }
         var cross: [Pot] = []
         var members: [Person] = []
@@ -103,11 +140,14 @@ public struct TargetContext: Hashable, Sendable {
         }
         self.init(
             household: household, pots: household.flatMap { pots[$0.id] } ?? [], crossPots: cross,
-            sharedMembers: members, me: me
+            sharedMembers: members, me: me, accounts: accounts
         )
     }
 
     var isShared: Bool { household?.kind == .gemeinsam }
+
+    /// Bargeldkonten des Haushalts
+    var cashAccounts: [Account] { accounts.filter { $0.source == .bar } }
 
     /// Gibt es einen gemeinsamen Haushalt, mit dem Geld hin- und hergehen kann?
     var hasCounterpart: Bool { isShared || !sharedMembers.isEmpty }
@@ -139,6 +179,9 @@ public struct TargetContext: Hashable, Sendable {
             return "Einnahme"
         case .transfer:
             return "Umbuchung"
+        case let .transferTo(id):
+            guard let account = accounts.first(where: { $0.id == id }) else { return "Umbuchung" }
+            return account.source == .bar ? "Ins Bargeld" : "Umbuchung → \(account.name)"
         case let .contribution(personId):
             return isShared ? "Einzahlung von \(personName(personId, me: "mir"))" : "Einzahlung ins Gemeinsame"
         case let .settlement(personId):
@@ -160,7 +203,7 @@ public struct TargetContext: Hashable, Sendable {
         case .settlement:
             // übliche Richtung: gemeinsam ein Ausgang (Erstattung), privat ein Eingang
             return isShared ? amountCents < 0 : amountCents > 0
-        case .income, .transfer, .contribution:
+        case .income, .transfer, .transferTo, .contribution:
             return true
         }
     }
@@ -200,7 +243,15 @@ public struct TargetContext: Hashable, Sendable {
             )
         }
 
-        var special = [option(.income, group: "Sonstiges"), option(.transfer, group: "Sonstiges")]
+        // Bei Ausgängen zuerst „Ins Bargeld“ (Umbuchung mit dem Bargeldkonto als Gegenkonto).
+        let cash = forIncome ? [] : cashAccounts
+        var special = cash.map {
+            TargetOption(
+                target: .transferTo($0.id), label: cash.count == 1 ? "Ins Bargeld" : "Ins Bargeld (\($0.name))",
+                group: "Sonstiges"
+            )
+        }
+        special += [option(.income, group: "Sonstiges"), option(.transfer, group: "Sonstiges")]
         if hasCounterpart {
             if isShared {
                 let members = sharedMembers.filter { $0.id == me?.id } + sharedMembers.filter { $0.id != me?.id }
@@ -245,8 +296,9 @@ public struct TargetOption: Hashable, Sendable, Identifiable {
     }
 
     /// Ohne Wissen über andere Haushalte: aktive Töpfe, Einnahme, Umbuchung.
-    public static func options(pots: [Pot], forIncome: Bool) -> [TargetOption] {
-        TargetContext(household: nil, pots: pots).options(amountCents: forIncome ? 1 : -1)
+    /// - Parameter cashAccounts: Bargeldkonten des Haushalts; bei Ausgängen gibt es „Ins Bargeld“
+    public static func options(pots: [Pot], forIncome: Bool, cashAccounts: [Account] = []) -> [TargetOption] {
+        TargetContext(household: nil, pots: pots, accounts: cashAccounts).options(amountCents: forIncome ? 1 : -1)
     }
 }
 

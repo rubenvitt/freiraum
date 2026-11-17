@@ -57,7 +57,8 @@ für iOS und macOS ohne Signatur.
   gültig ab einem Monat), die Freigabe des Solls und den Verlauf; eigene Regeln löscht man dort
   per Wischen. Das Soll der anderen Person steht nur da, wenn es fest ist oder freigegeben wurde.
 - Barausgaben landen im Bargeldkonto des Haushalts; fehlt es, legt die App beim ersten Erfassen
-  eins an. Abhebungen am Automaten als „Umbuchung“ zuordnen.
+  eins an. Abhebungen am Automaten bucht „Ins Bargeld buchen“ als Umbuchung ins Bargeldkonto;
+  die Übersicht zeigt dann, wie viel davon noch nicht als Ausgabe erfasst ist.
 - Gemeinsames Konto, privater Einkauf: beim Bestätigen „Ändern“ und einen Topf unter
   „Privat (ich zahle zurück)“ wählen. Der Betrag steht dann als Schuld im Ausgleich (Übersicht
   „Gemeinsam“). Zurückgezahlt wird per Überweisung aufs gemeinsame Konto, die man dort als
