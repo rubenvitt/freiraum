@@ -55,6 +55,8 @@ Beträge immer als ganze Cent (Integer), Währung EUR.
 - **Vorschlag**: Topf-Vorschlag zu einer Buchung mit Quelle (`regel` oder `llm`), Konfidenz und Begründung in einem Satz.
 - **Wiederkehrend**: erkannte Serien (Abos, Miete, Gehalt) für Abo-Radar und Prognosen.
 
+Rechenregeln für Übertrag, Überziehung, Plan je Topf-Typ, Erst-ich-Automatik, Monatsabschluss und Kategorisierung: [ADR 0003](../../adr/0003-budget-kern.md).
+
 ### Invarianten
 
 - Zuweisungen eines Monats übersteigen nie das verfügbare Geld des Haushalts („Noch ohne Aufgabe“ ≥ 0).

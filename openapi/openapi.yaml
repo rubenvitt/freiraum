@@ -494,11 +494,18 @@ components:
             - importiert
             - vorgeschlagen
             - bestaetigt
+          description: importiert = noch ohne Aufteilung; vorgeschlagen = Aufteilung aus Regel oder LLM, zählt schon im Budget; bestaetigt = von einer Person bestätigt oder korrigiert
         recurringSeriesId:
           type:
             - string
             - "null"
           format: uuid
+        splits:
+          type: array
+          items:
+            $ref: "#/components/schemas/Split"
+        suggestion:
+          $ref: "#/components/schemas/Suggestion"
       required:
         - id
         - accountId
@@ -512,6 +519,75 @@ components:
         - purpose
         - status
         - recurringSeriesId
+        - splits
+        - suggestion
+    Split:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum:
+            - topf
+            - einnahme
+            - umbuchung
+          description: topf = Ausgabe oder Erstattung eines Topfs; einnahme = fließt in „Noch ohne Aufgabe“; umbuchung = zwischen eigenen Konten desselben Haushalts, ohne Wirkung aufs Budget
+        potId:
+          type:
+            - string
+            - "null"
+          format: uuid
+          description: nur bei kind = topf
+        amountCents:
+          type: integer
+          minimum: -100000000000
+          maximum: 100000000000
+          description: Betrag in Cent; negativ = Ausgang
+          example: -1299
+      required:
+        - kind
+        - potId
+        - amountCents
+    Suggestion:
+      type:
+        - object
+        - "null"
+      properties:
+        source:
+          type: string
+          enum:
+            - regel
+            - llm
+        kind:
+          type: string
+          enum:
+            - topf
+            - einnahme
+            - umbuchung
+          description: topf = Ausgabe oder Erstattung eines Topfs; einnahme = fließt in „Noch ohne Aufgabe“; umbuchung = zwischen eigenen Konten desselben Haushalts, ohne Wirkung aufs Budget
+        potId:
+          type:
+            - string
+            - "null"
+          format: uuid
+        confidencePct:
+          type: integer
+          minimum: 0
+          maximum: 100
+        reason:
+          type: string
+          description: Begründung in einem Satz
+        ruleId:
+          type:
+            - string
+            - "null"
+          format: uuid
+      required:
+        - source
+        - kind
+        - potId
+        - confidencePct
+        - reason
+        - ruleId
     RecurringSeries:
       type: object
       properties:
@@ -578,6 +654,303 @@ components:
         - lastDate
         - nextExpectedDate
         - state
+    Pot:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        householdId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        kind:
+          type: string
+          enum:
+            - monatlich
+            - ruecklage
+            - ziel
+            - erst_ich
+          description: monatlich = Monatsbudget (amountCents je Monat, optional); ruecklage = unregelmäßige Kosten (amountCents je Jahr, Monatsrate = ein Zwölftel); ziel = Zielbetrag (amountCents) bis targetMonth; erst_ich = wird nach jeder Einnahme zuerst gefüllt (amountCents je Monat oder percentBp der Einnahmen des Monats)
+        groupName:
+          type:
+            - string
+            - "null"
+        amountCents:
+          type:
+            - integer
+            - "null"
+        percentBp:
+          type:
+            - integer
+            - "null"
+        targetMonth:
+          type:
+            - string
+            - "null"
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        sortOrder:
+          type: integer
+        archived:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - householdId
+        - name
+        - kind
+        - groupName
+        - amountCents
+        - percentBp
+        - targetMonth
+        - sortOrder
+        - archived
+        - createdAt
+    BudgetMonth:
+      type: object
+      properties:
+        householdId:
+          type: string
+          format: uuid
+        month:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        closedAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+        readyToAssignCents:
+          type: integer
+          description: "„Noch ohne Aufgabe“: Einnahmen bis zum Monat − alle Zuweisungen (auch spätere Monate) − Überziehung der Vormonate"
+        inflowsCents:
+          type: integer
+          description: Einnahmen im Monat
+        assignedCents:
+          type: integer
+        activityCents:
+          type: integer
+        overspentPreviousCents:
+          type: integer
+          description: Überziehung im Vormonat, mindert „Noch ohne Aufgabe“
+        assignedInFutureCents:
+          type: integer
+        unconfirmedTransactions:
+          type: integer
+        pots:
+          type: array
+          items:
+            $ref: "#/components/schemas/BudgetPot"
+      required:
+        - householdId
+        - month
+        - closedAt
+        - readyToAssignCents
+        - inflowsCents
+        - assignedCents
+        - activityCents
+        - overspentPreviousCents
+        - assignedInFutureCents
+        - unconfirmedTransactions
+        - pots
+    BudgetPot:
+      type: object
+      properties:
+        potId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        kind:
+          type: string
+          enum:
+            - monatlich
+            - ruecklage
+            - ziel
+            - erst_ich
+          description: monatlich = Monatsbudget (amountCents je Monat, optional); ruecklage = unregelmäßige Kosten (amountCents je Jahr, Monatsrate = ein Zwölftel); ziel = Zielbetrag (amountCents) bis targetMonth; erst_ich = wird nach jeder Einnahme zuerst gefüllt (amountCents je Monat oder percentBp der Einnahmen des Monats)
+        groupName:
+          type:
+            - string
+            - "null"
+        archived:
+          type: boolean
+        carryoverCents:
+          type: integer
+          description: Übertrag aus dem Vormonat, ≥ 0
+        assignedCents:
+          type: integer
+        assignmentSource:
+          type:
+            - string
+            - "null"
+          enum:
+            - manuell
+            - automatik
+            - null
+        activityCents:
+          type: integer
+          description: Summe der Aufteilungen im Monat (Ausgaben negativ)
+        availableCents:
+          type: integer
+          description: Übertrag + Zuweisung + Aufteilungen; negativ = überzogen
+        planCents:
+          type: integer
+          description: Was der Plan für den Monat vorsieht
+        neededCents:
+          type: integer
+          description: Davon noch nicht zugewiesen
+      required:
+        - potId
+        - name
+        - kind
+        - groupName
+        - archived
+        - carryoverCents
+        - assignedCents
+        - assignmentSource
+        - activityCents
+        - availableCents
+        - planCents
+        - neededCents
+    Rule:
+      type:
+        - object
+        - "null"
+      properties:
+        id:
+          type: string
+          format: uuid
+        householdId:
+          type: string
+          format: uuid
+        accountId:
+          type:
+            - string
+            - "null"
+          format: uuid
+        direction:
+          type:
+            - string
+            - "null"
+          enum:
+            - eingang
+            - ausgang
+            - null
+        counterpartyIban:
+          type:
+            - string
+            - "null"
+        counterpartyName:
+          type:
+            - string
+            - "null"
+          description: Gleichheit ohne Groß-/Kleinschreibung
+        purposeContains:
+          type:
+            - string
+            - "null"
+        minAmountCents:
+          type:
+            - integer
+            - "null"
+        maxAmountCents:
+          type:
+            - integer
+            - "null"
+        kind:
+          type: string
+          enum:
+            - topf
+            - einnahme
+            - umbuchung
+          description: topf = Ausgabe oder Erstattung eines Topfs; einnahme = fließt in „Noch ohne Aufgabe“; umbuchung = zwischen eigenen Konten desselben Haushalts, ohne Wirkung aufs Budget
+        potId:
+          type:
+            - string
+            - "null"
+          format: uuid
+        origin:
+          type: string
+          enum:
+            - korrektur
+            - manuell
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - householdId
+        - accountId
+        - direction
+        - counterpartyIban
+        - counterpartyName
+        - purposeContains
+        - minAmountCents
+        - maxAmountCents
+        - kind
+        - potId
+        - origin
+        - createdAt
+        - updatedAt
+      description: aus der Korrektur entstandene Regel
+    RuleInput:
+      type: object
+      properties:
+        accountId:
+          type: string
+          format: uuid
+        direction:
+          type: string
+          enum:
+            - eingang
+            - ausgang
+        counterpartyIban:
+          type: string
+          example: DE02120300000000202051
+        counterpartyName:
+          type: string
+          minLength: 1
+          maxLength: 300
+        purposeContains:
+          type: string
+          minLength: 1
+          maxLength: 300
+        minAmountCents:
+          type: integer
+          minimum: -100000000000
+          maximum: 100000000000
+          description: Betrag in Cent; negativ = Ausgang
+          example: -1299
+        maxAmountCents:
+          type: integer
+          minimum: -100000000000
+          maximum: 100000000000
+          description: Betrag in Cent; negativ = Ausgang
+          example: -1299
+        kind:
+          type: string
+          enum:
+            - topf
+            - einnahme
+            - umbuchung
+          description: topf = Ausgabe oder Erstattung eines Topfs; einnahme = fließt in „Noch ohne Aufgabe“; umbuchung = zwischen eigenen Konten desselben Haushalts, ohne Wirkung aufs Budget
+        potId:
+          type:
+            - string
+            - "null"
+          format: uuid
+          default: null
+      required:
+        - kind
   parameters: {}
 paths:
   /health:
@@ -1085,6 +1458,848 @@ paths:
                 $ref: "#/components/schemas/Error"
         "401":
           description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/households/{householdId}/pots:
+    get:
+      tags:
+        - Budget
+      summary: Töpfe eines Haushalts
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+        - schema:
+            type: string
+            enum:
+              - "true"
+              - "false"
+            default: "false"
+          required: false
+          name: includeArchived
+          in: query
+      responses:
+        "200":
+          description: Töpfe
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Pot"
+                required:
+                  - items
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags:
+        - Budget
+      summary: Topf anlegen
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+      requestBody:
+        description: Neuer Topf
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                kind:
+                  type: string
+                  enum:
+                    - monatlich
+                    - ruecklage
+                    - ziel
+                    - erst_ich
+                  description: monatlich = Monatsbudget (amountCents je Monat, optional); ruecklage = unregelmäßige Kosten (amountCents je Jahr, Monatsrate = ein Zwölftel); ziel = Zielbetrag (amountCents) bis targetMonth; erst_ich = wird nach jeder Einnahme zuerst gefüllt (amountCents je Monat oder percentBp der Einnahmen des Monats)
+                groupName:
+                  type:
+                    - string
+                    - "null"
+                  maxLength: 100
+                amountCents:
+                  type:
+                    - integer
+                    - "null"
+                  minimum: 1
+                  maximum: 100000000000
+                percentBp:
+                  type:
+                    - integer
+                    - "null"
+                  minimum: 1
+                  maximum: 10000
+                  description: Anteil in Basispunkten, 1000 = 10 %
+                  example: 1000
+                targetMonth:
+                  type:
+                    - string
+                    - "null"
+                  pattern: ^\d{4}-(0[1-9]|1[0-2])$
+                  example: 2026-11
+                sortOrder:
+                  type: integer
+                  minimum: 0
+                  maximum: 100000
+              required:
+                - name
+                - kind
+      responses:
+        "201":
+          description: Topf angelegt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pot"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Name schon vergeben
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Plan passt nicht zum Topf-Typ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/pots/{potId}:
+    patch:
+      tags:
+        - Budget
+      summary: Topf ändern oder archivieren
+      description: Der Typ lässt sich nicht ändern. Archivieren geht nur, wenn der Topf leer ist.
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: potId
+          in: path
+      requestBody:
+        description: Änderungen
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                groupName:
+                  type:
+                    - string
+                    - "null"
+                  maxLength: 100
+                amountCents:
+                  type:
+                    - integer
+                    - "null"
+                  minimum: 1
+                  maximum: 100000000000
+                percentBp:
+                  type:
+                    - integer
+                    - "null"
+                  minimum: 1
+                  maximum: 10000
+                  description: Anteil in Basispunkten, 1000 = 10 %
+                  example: 1000
+                targetMonth:
+                  type:
+                    - string
+                    - "null"
+                  pattern: ^\d{4}-(0[1-9]|1[0-2])$
+                  example: 2026-11
+                sortOrder:
+                  type: integer
+                  minimum: 0
+                  maximum: 100000
+                archived:
+                  type: boolean
+      responses:
+        "200":
+          description: Topf geändert
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pot"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Topf nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Name vergeben oder Topf nicht leer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Plan passt nicht zum Topf-Typ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/households/{householdId}/budget/{month}:
+    get:
+      tags:
+        - Budget
+      summary: "Budget eines Monats: „Noch ohne Aufgabe“ und alle Töpfe"
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+        - schema:
+            type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+            example: 2026-11
+          required: true
+          name: month
+          in: path
+      responses:
+        "200":
+          description: Budget des Monats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BudgetMonth"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/households/{householdId}/budget/{month}/pots/{potId}:
+    put:
+      tags:
+        - Budget
+      summary: Zuweisung eines Topfs für einen Monat setzen
+      description: Erhöhen geht nur, solange „Noch ohne Aufgabe“ im Monat (und im laufenden Monat, falls später) nicht negativ wird. Senken geht immer. Eine eigene Zuweisung an einen Erst-ich-Topf schaltet die Automatik für diesen Topf und Monat ab.
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+        - schema:
+            type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+            example: 2026-11
+          required: true
+          name: month
+          in: path
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: potId
+          in: path
+      requestBody:
+        description: Neuer Betrag (nicht die Änderung)
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                assignedCents:
+                  type: integer
+                  minimum: -100000000000
+                  maximum: 100000000000
+                  description: Betrag in Cent; negativ = Ausgang
+                  example: -1299
+              required:
+                - assignedCents
+      responses:
+        "200":
+          description: Budget des Monats nach der Änderung
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BudgetMonth"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt oder Topf nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Monat abgeschlossen
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Nicht genug Geld ohne Aufgabe, oder Topf archiviert
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/households/{householdId}/budget/{month}/erst-ich:
+    post:
+      tags:
+        - Budget
+      summary: Erst-ich-Automatik für einen Monat von Hand anstoßen
+      description: Läuft sonst von selbst nach jeder neuen Einnahme. Füllt die Erst-ich-Töpfe in ihrer Reihenfolge bis zu ihrem Plan, soweit „Noch ohne Aufgabe“ reicht.
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+        - schema:
+            type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+            example: 2026-11
+          required: true
+          name: month
+          in: path
+      responses:
+        "200":
+          description: Budget des Monats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BudgetMonth"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Monat abgeschlossen
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/households/{householdId}/budget/{month}/closing:
+    post:
+      tags:
+        - Budget
+      summary: Monat abschließen
+      description: Nur vergangene Monate, der Reihe nach, und nur wenn alle Buchungen des Monats bestätigt sind. Danach nimmt der Monat keine Zuweisungen mehr an; der Stand wird festgehalten.
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+        - schema:
+            type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+            example: 2026-11
+          required: true
+          name: month
+          in: path
+      responses:
+        "201":
+          description: Monat abgeschlossen
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BudgetMonth"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Monat läuft noch, ist schon abgeschlossen, Vormonat offen oder Buchungen offen
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags:
+        - Budget
+      summary: Abschluss zurücknehmen (nur der zuletzt abgeschlossene Monat)
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+        - schema:
+            type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+            example: 2026-11
+          required: true
+          name: month
+          in: path
+      responses:
+        "200":
+          description: Monat wieder offen
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BudgetMonth"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Monat nicht abgeschlossen oder späterer Monat abgeschlossen
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/transactions/pending:
+    get:
+      tags:
+        - Kategorisierung
+      summary: Buchungen, die auf Bestätigung warten (neueste zuerst)
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: false
+          name: householdId
+          in: query
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 200
+          required: false
+          name: limit
+          in: query
+      responses:
+        "200":
+          description: Offene Buchungen
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Transaction"
+                required:
+                  - items
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/transactions/{transactionId}/confirm:
+    post:
+      tags:
+        - Kategorisierung
+      summary: Vorschlag mit einem Tipp bestätigen
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: transactionId
+          in: path
+      responses:
+        "200":
+          description: Bestätigte Buchung
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transaction"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Buchung nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Kein Vorschlag vorhanden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/transactions/{transactionId}/splits:
+    put:
+      tags:
+        - Kategorisierung
+      summary: Aufteilung festlegen (korrigieren) und bestätigen
+      description: Die Summe der Aufteilungen muss dem Buchungsbetrag entsprechen; Töpfe kommen aus dem Haushalt des Kontos. Weicht eine einfache Zuordnung vom Vorschlag ab, entsteht eine Regel für die Gegenpartei (außer learn = false), und offene Buchungen werden neu vorgeschlagen.
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: transactionId
+          in: path
+      requestBody:
+        description: Aufteilung
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                splits:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/Split"
+                  minItems: 1
+                  maxItems: 50
+                learn:
+                  type: boolean
+                  default: true
+              required:
+                - splits
+      responses:
+        "200":
+          description: Bestätigte Buchung
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  transaction:
+                    $ref: "#/components/schemas/Transaction"
+                  rule:
+                    $ref: "#/components/schemas/Rule"
+                  resuggested:
+                    type: integer
+                    description: offene Buchungen, die die Regel neu vorgeschlagen hat
+                required:
+                  - transaction
+                  - rule
+                  - resuggested
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Buchung nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Summe falsch oder Topf aus anderem Haushalt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/households/{householdId}/rules:
+    get:
+      tags:
+        - Kategorisierung
+      summary: Kategorisierungsregeln eines Haushalts
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+      responses:
+        "200":
+          description: Regeln
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Rule"
+                required:
+                  - items
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags:
+        - Kategorisierung
+      summary: Regel von Hand anlegen und auf offene Buchungen anwenden
+      description: Alle gesetzten Merkmale müssen passen. Bei mehreren Treffern gewinnt die spezifischste Regel, bei Gleichstand die zuletzt geänderte. Gleiche Merkmale ersetzen eine bestehende Regel.
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+      requestBody:
+        description: Neue Regel
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RuleInput"
+      responses:
+        "201":
+          description: Regel angelegt (oder bestehende umgelenkt)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rule:
+                    $ref: "#/components/schemas/Rule"
+                  resuggested:
+                    type: integer
+                required:
+                  - rule
+                  - resuggested
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Kein Merkmal, Topf oder Konto aus anderem Haushalt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/rules/{ruleId}:
+    delete:
+      tags:
+        - Kategorisierung
+      summary: Regel löschen (bestehende Vorschläge bleiben)
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: ruleId
+          in: path
+      responses:
+        "204":
+          description: Gelöscht
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Regel nicht gefunden (oder kein Zugriff)
           content:
             application/json:
               schema:
