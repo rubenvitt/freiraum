@@ -67,6 +67,7 @@ describe('OpenAPI-Vertrag', () => {
       '/v1/households/{householdId}/rules',
       '/v1/households/{householdId}/settlements',
       '/v1/me',
+      '/v1/persons/{personId}/analytics/flow',
       '/v1/persons/{personId}/metrics/{month}',
       '/v1/pots/{potId}',
       '/v1/recurring',

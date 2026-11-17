@@ -14,6 +14,9 @@
  * - **Umbuchungen** zwischen eigenen Konten zählen nirgends, ebenso **Ausgleich** und privat
  *   bezahlte Ausgaben in Töpfen eines anderen (des gemeinsamen) Haushalts: Das ist eine Forderung
  *   ans Gemeinsame, kein eigener Konsum (ADR 0006).
+ * - **Über Haushalte hinweg** (FREI-22): Ausgaben vom Konto eines anderen Haushalts in eigenen
+ *   Töpfen zählen beim Topf, Verrechnungen mit der Einzahlung wie Einzahlungen. Beides kommt als
+ *   Buchung mit `offAccount` herein (nicht auf den Konten des Haushalts).
  */
 
 import type { PotKind } from '../budget/compute.js'
@@ -27,6 +30,11 @@ export interface AnalyticsSplit {
   kind: SplitKind
   potId: string | null
   amountCents: number
+  /**
+   * Bei Einzahlung und Ausgleich auf einem gemeinsamen Konto: von wem bzw. an wen. Auf privaten
+   * Konten leer (ADR 0006). Daran erkennt die Rechnung die Seite einer Einzahlung.
+   */
+  personId?: string | null | undefined
 }
 
 export interface AnalyticsTransaction {
@@ -38,6 +46,12 @@ export interface AnalyticsTransaction {
   recurringSeriesId: string | null
   /** leer = noch nicht zugeordnet */
   splits: AnalyticsSplit[]
+  /**
+   * Nicht auf den Konten dieses Haushalts gebucht: Ausgabe vom Konto eines anderen Haushalts in
+   * einem eigenen Topf, oder eine Verrechnung mit der Einzahlung. Zählt in Kennzahlen und
+   * Geldfluss, aber nicht im Alter des Geldes (das folgt dem Geld auf den eigenen Konten).
+   */
+  offAccount?: boolean | undefined
 }
 
 export interface AnalyticsPot {
@@ -72,6 +86,9 @@ const ZERO: Classified = {
   uncategorizedInCents: 0,
 }
 
+/** Einzahlung auf dem gemeinsamen Konto (nennt die Person) statt auf dem privaten. */
+const isSharedSide = (s: AnalyticsSplit) => s.personId !== undefined && s.personId !== null
+
 export function classify(tx: AnalyticsTransaction, potKinds: Map<string, PotKind>): Classified {
   const result = { ...ZERO }
   const recurringOut = tx.recurringSeriesId !== null && tx.amountCents < 0
@@ -89,8 +106,9 @@ export function classify(tx: AnalyticsTransaction, potKinds: Map<string, PotKind
   for (const s of tx.splits) {
     if (s.kind === 'einnahme') result.incomeCents += s.amountCents
     else if (s.kind === 'einzahlung') {
-      // Die Richtung ist je Kontoart fest: privat Ausgang, gemeinsam Eingang (ADR 0006).
-      if (s.amountCents > 0) result.incomeCents += s.amountCents
+      // Gemeinsame Seite (mit Person): Einkommen. Private Seite: Abfluss ins Gemeinsame. Eine
+      // verrechnete Schuld (FREI-28) mindert beides, deshalb zählt die Seite, nicht das Vorzeichen.
+      if (isSharedSide(s)) result.incomeCents += s.amountCents
       else result.contributionsCents -= s.amountCents
     } else if (s.kind === 'topf' && s.potId !== null) {
       const kind = potKinds.get(s.potId)
@@ -132,10 +150,12 @@ export interface AgedOutflow {
  * Alter jedes Ausgangs: Eingänge bilden eine Warteschlange (älteste zuerst), jeder Ausgang
  * verbraucht von vorn. Das Alter ist der mit dem Betrag gewichtete Abstand in Tagen. Ausgänge,
  * für die kein bekannter Eingang mehr da ist (Geld aus der Zeit vor dem ersten Import), bekommen
- * kein Alter. Umbuchungen zählen nicht.
+ * kein Alter. Umbuchungen zählen nicht, ebenso Buchungen außerhalb der eigenen Konten
+ * (`offAccount`).
  */
 export function agedOutflows(transactions: AnalyticsTransaction[]): AgedOutflow[] {
   const events = transactions
+    .filter((tx) => !tx.offAccount)
     .map((tx) => ({
       date: tx.bookingDate,
       amount:
@@ -309,7 +329,7 @@ export function runway(
 
 // --- Geldfluss (Sankey) -------------------------------------------------------------
 
-export type FlowNodeKind = 'quelle' | 'haushalt' | 'gruppe' | 'topf' | 'rest'
+export type FlowNodeKind = 'quelle' | 'haushalt' | 'einzahlung' | 'gruppe' | 'topf' | 'rest'
 
 export interface FlowNode {
   id: string
@@ -332,14 +352,37 @@ export interface Flow {
   outCents: number
 }
 
+export interface FlowOptions {
+  /** Namen der Personen für Einzahlungen auf dem gemeinsamen Konto („Einzahlung Person A“) */
+  personNames?: Map<string, string> | undefined
+  /**
+   * Nur im Geldfluss über Haushalte hinweg: Einzahlungen ins Gemeinsame mit diesen Werten statt
+   * der privaten Seite der Überweisungen. Gezählt wird dann die Seite des gemeinsamen Kontos wie
+   * beim Ist der Einzahlungsregel (ADR 0006), damit Haushalt und Ziel denselben Wert zeigen.
+   */
+  contributionsTo?: { id: string; label: string; valueCents: number }[] | undefined
+}
+
 /** Höchstzahl einzeln gezeigter Einnahmequellen; der Rest wird zusammengefasst. */
 const MAX_SOURCES = 6
 const HOUSEHOLD = 'haushalt'
+/** Abfluss ins Gemeinsame im privaten Haushalt (eigener Geldfluss je Haushalt). */
+const CONTRIBUTION_OUT = 'einzahlung'
+const contributionIn = (personId: string) => `einzahlung:${personId}`
+
+const inMonths = (tx: AnalyticsTransaction, from: Month, to: Month) => {
+  const m = monthOf(tx.bookingDate)
+  return m >= from && m <= to
+}
 
 /**
  * Geldfluss im Zeitraum: Einnahmequellen → Haushalt → Gruppen → Töpfe. Die Mitte ist
  * ausgeglichen: Fließt mehr hinaus als hinein, kommt der Rest „aus Erspartem“; fließt weniger
  * hinaus, bleibt er „übrig“. Töpfe mit mehr Erstattungen als Ausgaben erscheinen als Quelle.
+ *
+ * Einzahlungen (ADR 0006): im privaten Haushalt ein Abfluss „Ins Gemeinsame“, im gemeinsamen je
+ * Person eine Quelle. Ausgleich und Ausgaben in Töpfen eines anderen Haushalts zählen nicht; dort
+ * zählen sie beim Topf (`offAccount`).
  */
 export function flow(
   transactions: AnalyticsTransaction[],
@@ -347,16 +390,17 @@ export function flow(
   householdName: string,
   from: Month,
   to: Month,
+  options: FlowOptions = {},
 ): Flow {
-  const inRange = transactions.filter((tx) => {
-    const m = monthOf(tx.bookingDate)
-    return m >= from && m <= to
-  })
+  const ownPots = new Set(pots.map((p) => p.id))
   const income = new Map<string, number>()
+  const contributionsIn = new Map<string, number>()
   const potNet = new Map<string, number>()
+  let contributionsOut = 0
   let uncategorizedIn = 0
   let uncategorizedOut = 0
-  for (const tx of inRange) {
+  for (const tx of transactions) {
+    if (!inMonths(tx, from, to)) continue
     if (tx.splits.length === 0) {
       if (tx.amountCents < 0) uncategorizedOut -= tx.amountCents
       else uncategorizedIn += tx.amountCents
@@ -366,7 +410,12 @@ export function flow(
       if (s.kind === 'einnahme') {
         const label = tx.counterparty ?? 'Ohne Angabe'
         income.set(label, (income.get(label) ?? 0) + s.amountCents)
-      } else if (s.kind === 'topf' && s.potId !== null) {
+      } else if (s.kind === 'einzahlung') {
+        if (isSharedSide(s)) {
+          const id = s.personId as string
+          contributionsIn.set(id, (contributionsIn.get(id) ?? 0) + s.amountCents)
+        } else contributionsOut -= s.amountCents
+      } else if (s.kind === 'topf' && s.potId !== null && ownPots.has(s.potId)) {
         potNet.set(s.potId, (potNet.get(s.potId) ?? 0) + s.amountCents)
       }
     }
@@ -381,7 +430,13 @@ export function flow(
     if (valueCents > 0) links.push({ source, target, valueCents })
   }
 
-  // Quellen
+  // Quellen: zuerst die Einzahlungen der Personen (im Gemeinsamen das eigentliche Einkommen)
+  for (const [personId, value] of contributionsIn) {
+    if (value <= 0) continue
+    const name = options.personNames?.get(personId)
+    node(contributionIn(personId), name ? `Einzahlung ${name}` : 'Einzahlung', 'einzahlung')
+    link(contributionIn(personId), HOUSEHOLD, value)
+  }
   const sources = [...income.entries()]
     .filter(([, v]) => v > 0)
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
@@ -405,7 +460,15 @@ export function flow(
     link('quelle:nicht_zugeordnet', HOUSEHOLD, uncategorizedIn)
   }
 
-  // Ziele: Töpfe, nach Gruppe geordnet (Reihenfolge wie im Budget)
+  // Ziele: zuerst das Gemeinsame, dann Töpfe nach Gruppe (Reihenfolge wie im Budget)
+  const contributionTargets = options.contributionsTo ?? [
+    { id: CONTRIBUTION_OUT, label: 'Ins Gemeinsame', valueCents: contributionsOut },
+  ]
+  for (const target of contributionTargets) {
+    if (target.valueCents <= 0) continue
+    node(target.id, target.label, 'einzahlung')
+    link(HOUSEHOLD, target.id, target.valueCents)
+  }
   const groups = new Map<string, { pot: AnalyticsPot; value: number }[]>()
   const ungrouped: { pot: AnalyticsPot; value: number }[] = []
   for (const pot of pots) {
@@ -454,6 +517,116 @@ export function flow(
     potKind: null,
   })
   return { nodes, links, inCents: inflow, outCents: outflow }
+}
+
+// --- Geldfluss über Haushalte hinweg ---------------------------------------------------
+
+export interface FlowHousehold {
+  householdId: string
+  name: string
+  transactions: AnalyticsTransaction[]
+  pots: AnalyticsPot[]
+}
+
+export interface PersonFlowNode extends FlowNode {
+  householdId: string
+}
+
+export interface PersonFlowHousehold {
+  householdId: string
+  name: string
+  kind: 'privat' | 'gemeinsam'
+  inCents: number
+  outCents: number
+}
+
+export interface PersonFlow {
+  nodes: PersonFlowNode[]
+  links: FlowLink[]
+  households: PersonFlowHousehold[]
+}
+
+/**
+ * Geldfluss einer Person über ihre Haushalte (FREI-22): Einkommen → privater Haushalt → Töpfe
+ * und Einzahlung → gemeinsamer Haushalt → gemeinsame Töpfe. Jeder Haushalt ist für sich
+ * ausgeglichen („Aus Erspartem“ bzw. „Übrig“).
+ *
+ * Die Einzahlung ist **eine** Kante vom privaten zum gemeinsamen Haushalt. Ihr Wert kommt von
+ * der Seite des gemeinsamen Kontos (Einzahlungen der Person plus Verrechnungen), wie das Ist der
+ * Einzahlungsregel. Die private Seite der Überweisungen fällt dafür weg, damit nichts doppelt
+ * zählt. Ausgleich zählt nirgends; Ausgaben über Haushaltsgrenzen zählen beim Topf.
+ *
+ * Knoten-IDs bekommen die Haushalts-ID vorangestellt (`<haushalt>/<id>`), damit sie eindeutig
+ * bleiben.
+ */
+export function personFlow(
+  personId: string,
+  own: FlowHousehold,
+  shared: (FlowHousehold & { personNames: Map<string, string> })[],
+  from: Month,
+  to: Month,
+): PersonFlow {
+  const at = (householdId: string, id: string) => `${householdId}/${id}`
+  const nodes: PersonFlowNode[] = []
+  const links: FlowLink[] = []
+  const households: PersonFlowHousehold[] = []
+
+  const sharedFlows = shared.map((h) => {
+    const f = flow(h.transactions, h.pots, h.name, from, to, { personNames: h.personNames })
+    const mine = contributionIn(personId)
+    const value = f.links.find((l) => l.source === mine)?.valueCents ?? 0
+    return { h, f, mine, value }
+  })
+  const ownFlow = flow(own.transactions, own.pots, own.name, from, to, {
+    contributionsTo: sharedFlows.map(({ h, value }) => ({
+      id: `${CONTRIBUTION_OUT}:${h.householdId}`,
+      label: h.name,
+      valueCents: value,
+    })),
+  })
+
+  // Privater Haushalt: Die Einzahlungsknoten werden zu den gemeinsamen Haushalten.
+  const targets = new Map(
+    sharedFlows.map(({ h }) => [
+      `${CONTRIBUTION_OUT}:${h.householdId}`,
+      at(h.householdId, HOUSEHOLD),
+    ]),
+  )
+  const ownId = (id: string) => targets.get(id) ?? at(own.householdId, id)
+  for (const n of ownFlow.nodes) {
+    if (targets.has(n.id)) continue
+    nodes.push({ ...n, id: ownId(n.id), householdId: own.householdId })
+  }
+  for (const l of ownFlow.links) {
+    links.push({ ...l, source: ownId(l.source), target: ownId(l.target) })
+  }
+  households.push({
+    householdId: own.householdId,
+    name: own.name,
+    kind: 'privat',
+    inCents: ownFlow.inCents,
+    outCents: ownFlow.outCents,
+  })
+
+  // Gemeinsame Haushalte: Die eigene Einzahlung kommt schon als Kante vom privaten Haushalt.
+  for (const { h, f, mine } of sharedFlows) {
+    for (const n of f.nodes) {
+      if (n.id === mine) continue
+      nodes.push({ ...n, id: at(h.householdId, n.id), householdId: h.householdId })
+    }
+    for (const l of f.links) {
+      if (l.source === mine) continue
+      links.push({ ...l, source: at(h.householdId, l.source), target: at(h.householdId, l.target) })
+    }
+    households.push({
+      householdId: h.householdId,
+      name: h.name,
+      kind: 'gemeinsam',
+      inCents: f.inCents,
+      outCents: f.outCents,
+    })
+  }
+  return { nodes, links, households }
 }
 
 // --- Auffälligkeiten --------------------------------------------------------------
