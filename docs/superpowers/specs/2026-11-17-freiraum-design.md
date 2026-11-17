@@ -91,6 +91,8 @@ Kriterien: alle eigenen Banken abgedeckt, Kosten, Aufwand der regelmäßigen Zus
 - Ziele mit Prognose des Erreichens
 - Besitzkosten („Was kostet mich mein Besitz?“)
 
+Definitionen, Schwellen und das Datenmodell für Besitz: [ADR 0005](../../adr/0005-auswertungen.md).
+
 ## Etappen
 
 - **E0 Grundgerüst**: Repo, Technik festlegen, Backend-Skelett, Datenbank, Anmeldung, Deployment aufs Homelab.

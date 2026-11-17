@@ -109,6 +109,11 @@ const RULES: CadenceRule[] = [
   },
 ]
 
+/** Mindestzahl an Buchungen je Rhythmus, ab der eine Serie erkannt wird. */
+export const MIN_OCCURRENCES = Object.fromEntries(
+  RULES.map((r) => [r.cadence, r.minOccurrences]),
+) as Record<Cadence, number>
+
 /** Bei nur zwei Buchungen (halbjährlich, jährlich) müssen die Beträge nahe beieinander liegen. */
 const TWO_OCCURRENCE_MAX_SPREAD = 0.1
 /** Anteil der Abstände, die ins Fenster passen müssen (Rest: ausgelassene Monate o. Ä.). */
