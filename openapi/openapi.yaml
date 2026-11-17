@@ -536,7 +536,8 @@ components:
             - string
             - "null"
           format: uuid
-          description: nur bei kind = topf
+          default: null
+          description: nur bei kind = topf; fehlt = null
         amountCents:
           type: integer
           minimum: -100000000000
@@ -545,7 +546,6 @@ components:
           example: -1299
       required:
         - kind
-        - potId
         - amountCents
     Suggestion:
       type:
