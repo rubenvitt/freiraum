@@ -1,14 +1,18 @@
-# Freiraum für iPhone (und Mac)
+# Freiraum für iPhone und Mac
 
-SwiftUI-App für iOS 26 und macOS 26, dazu ein Widget. Entscheidungen: [ADR 0004](../docs/adr/0004-ios-app.md).
+SwiftUI-App für iOS 26 und macOS 26, dazu ein Widget (iOS) und die Menüleiste (Mac).
+Entscheidungen: [ADR 0004](../docs/adr/0004-ios-app.md), Auswertungen:
+[ADR 0005](../docs/adr/0005-auswertungen.md).
 
 ## Aufbau
 
 - `project.yml`: Xcode-Projekt (XcodeGen). `Freiraum.xcodeproj` wird erzeugt, nicht eingecheckt.
 - `FreiraumKit/`: Swift-Paket ohne Oberfläche, baut und testet auch unter Linux.
   - `FreiraumAPI`: Client, beim Bauen aus `openapi/openapi.yaml` erzeugt (swift-openapi-generator).
-  - `FreiraumKit`: Dienst, Modelle, Beträge, Monate, Übersicht, Bestätigen, Eingaben, Widget-Schnappschuss.
+  - `FreiraumKit`: Dienst, Modelle, Beträge, Monate, Übersicht, Bestätigen, Eingaben, Widget-Schnappschuss,
+    Planung (Umschichten, Abschluss), Auswertungen samt Sankey-Layout, Menüleiste.
 - `Freiraum/`: App (Anmeldung, Übersicht, Töpfe, Bestätigen, Barausgabe, Verteilen, Einzahlungen).
+  `Freiraum/Views/Mac/`: nur macOS (Seitenleiste, Planung, Auswertungen, Menüleiste).
 - `FreiraumWidget/`: Widget „Freies Budget“.
 - `Config/`: Build-Einstellungen; persönliche Werte in `Local.xcconfig` (nicht im Repo).
 
@@ -41,7 +45,8 @@ docker run --rm -v "$PWD":/src -w /src/apple/FreiraumKit swift:6.1-noble swift t
 ```
 
 Die CI (`.github/workflows/apple.yml`) testet FreiraumKit unter Linux und baut App und Widget
-für iOS und macOS ohne Signatur.
+für iOS und macOS ohne Signatur. Lokal ohne Mac geht nur FreiraumKit; die Oberfläche prüft erst
+die CI.
 
 ## Hinweise
 
@@ -72,3 +77,21 @@ für iOS und macOS ohne Signatur.
   Im Simulator lässt sich der Abruf in Xcode über *Debug › Simulate Background Fetch* auslösen.
 - Das Widget zeigt den privaten Haushalt im laufenden Monat und liest nur, was die App zuletzt
   geladen hat.
+
+## Mac
+
+- Gleiches Ziel wie am iPhone, gleiche Anmeldung per Passkey. Die Associated Domain steht in
+  `Freiraum/Freiraum-macOS.entitlements`; `APPLE_APP_IDS` auf dem Server gilt für beide.
+- Seitenleiste: Übersicht und Töpfe wie am iPhone, dazu **Planung** und **Auswertungen**. Haushalt
+  (Ich / Gemeinsam) und Monat wählt man oben in der Werkzeugleiste; beides gilt für alle Bereiche.
+- Planung: Zuweisung direkt in der Tabelle ändern (Eingabetaste), über das Menü einer Zeile oder
+  „Umschichten“ Geld zwischen „Noch ohne Aufgabe“ und Töpfen verschieben. Reicht das Geld nicht,
+  steht die Meldung des Servers im Blatt. Vergangene Monate lassen sich abschließen, der zuletzt
+  abgeschlossene wieder öffnen.
+- Auswertungen: Kennzahlen, Geldfluss (Sankey, mit der Maus über ein Band fahren), Verlauf von
+  Sparquote, Fixkostenanteil und Alter des Geldes, Auffälligkeiten, Ziele, Besitzkosten. Der
+  Zeitraum (Monat, Quartal, Jahr) endet im gewählten Monat und beginnt frühestens mit dem
+  Budgetbeginn.
+- Menüleiste: „Noch ohne Aufgabe“ des privaten Haushalts im laufenden Monat, wartende Buchungen
+  (alle Haushalte) und die nächste Auffälligkeit. Ohne offenes Fenster läuft die App dort weiter,
+  lädt alle 15 Minuten neu und meldet neue wartende Buchungen, solange sie im Hintergrund ist.

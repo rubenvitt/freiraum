@@ -24,6 +24,9 @@ enum AppConfig {
         return URL.applicationSupportDirectory.appending(path: "Freiraum", directoryHint: .isDirectory)
     }
 
+    /// Hauptfenster am Mac (die Menüleiste öffnet es wieder, wenn es geschlossen ist).
+    static let mainWindowId = "main"
+
     static var refreshTaskIdentifier: String {
         (Bundle.main.bundleIdentifier ?? "freiraum") + ".refresh"
     }

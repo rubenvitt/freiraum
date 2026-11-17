@@ -2,6 +2,9 @@ import FreiraumKit
 import Foundation
 import Observation
 import UserNotifications
+#if os(macOS)
+import AppKit
+#endif
 #if os(iOS)
 import BackgroundTasks
 import WidgetKit
@@ -33,6 +36,20 @@ final class AppModel {
     /// Einzahlungsregeln mit Historie, je gemeinsamem Haushalt (geladen, wenn die Ansicht öffnet).
     private(set) var contributionRules: [String: [ContributionRule]] = [:]
     private(set) var shares: Shares?
+
+    // MARK: Auswertungen und Menüleiste (Mac)
+
+    var analyticsPeriod: AnalyticsPeriod = .monat
+    /// Aufbereitete Auswertung je Haushalt (für den angezeigten Monat und Zeitraum).
+    private(set) var analytics: [String: AnalyticsState] = [:]
+    /// Geldfluss je Haushalt, passend zu `analytics`.
+    private(set) var flows: [String: MoneyFlow] = [:]
+    private(set) var isLoadingAnalytics = false
+    /// Privater Haushalt im laufenden Monat und seine Auffälligkeiten, für die Menüleiste.
+    private(set) var menuBarBudget: BudgetMonth?
+    private(set) var menuBarAnomalies: [Anomaly] = []
+    @ObservationIgnored private var refreshLoop: Task<Void, Never>?
+
     var selectedHouseholdId: String?
     private(set) var month: YearMonth = .current()
 
@@ -51,6 +68,7 @@ final class AppModel {
             service = Self.makeService(url)
             person = Person(id: id, displayName: name)
         }
+        startPeriodicRefresh()
     }
 
     private enum Keys {
@@ -215,6 +233,10 @@ final class AppModel {
         contributions = [:]
         contributionRules = [:]
         shares = nil
+        analytics = [:]
+        flows = [:]
+        menuBarBudget = nil
+        menuBarAnomalies = []
         selectedHouseholdId = nil
         errorMessage = message
         snapshots.clear()
@@ -263,6 +285,9 @@ final class AppModel {
             lastLoaded = Date()
             contributions = await fetchContributions(service, households: households, month: month)
             await afterLoad(notify: notify)
+            #if os(macOS)
+            await refreshMenuBar()
+            #endif
         } catch {
             report(error)
         }
@@ -353,6 +378,9 @@ final class AppModel {
     }
 
     private func afterLoad(notify: Bool) async {
+        if month == .current(), let household = privateHousehold ?? households.first, let budget = budgets[household.id] {
+            menuBarBudget = budget
+        }
         // Widget: privater Haushalt im laufenden Monat.
         if month == .current(), let household = privateHousehold, let budget = budgets[household.id] {
             let snapshot = WidgetSnapshot(
@@ -694,6 +722,141 @@ final class AppModel {
         } else if !(error is CancellationError) {
             errorMessage = BudgetStartMessages.explain(error)
         }
+    }
+
+    // MARK: Planung (Mac)
+
+    func planning(for household: Household) -> PlanningState? {
+        guard let budget = budgets[household.id] else { return nil }
+        return PlanningState(budget: budget, pots: pots[household.id] ?? [])
+    }
+
+    /// Zuweisung eines Topfs im angezeigten Monat setzen. Liefert nil bei Erfolg, sonst die
+    /// Meldung des Servers (z. B. „Noch ohne Aufgabe“ würde negativ), für die Anzeige am Feld.
+    func assign(householdId: String, potId: String, cents: Int) async -> String? {
+        await changeBudget(householdId: householdId) { service, month in
+            _ = try await service.setAssignment(householdId: householdId, month: month, potId: potId, assignedCents: cents)
+        }
+    }
+
+    /// Geld umschichten: erst die Quelle senken, dann das Ziel erhöhen. Scheitert das Erhöhen,
+    /// nimmt der Dienst das Senken zurück. Liefert nil bei Erfolg, sonst die Meldung.
+    func move(householdId: String, from source: MoveMoney.Source, to potId: String, cents: Int) async -> String? {
+        guard let budget = budgets[householdId] else { return "Das Budget ist noch nicht geladen." }
+        let steps: [MoveMoney.Step]
+        do {
+            steps = try MoveMoney.steps(in: budget, from: source, to: potId, amountCents: cents)
+        } catch {
+            return (error as? MoveMoney.Problem)?.description ?? String(describing: error)
+        }
+        return await changeBudget(householdId: householdId) { service, month in
+            _ = try await service.move(householdId: householdId, month: month, steps: steps)
+        }
+    }
+
+    /// Angezeigten Monat abschließen (der Server prüft Reihenfolge und offene Buchungen).
+    func closeMonth(householdId: String) async -> String? {
+        await changeBudget(householdId: householdId) { service, month in
+            _ = try await service.closeMonth(householdId: householdId, month: month)
+        }
+    }
+
+    /// Abschluss des angezeigten Monats zurücknehmen (nur der zuletzt abgeschlossene).
+    func reopenMonth(householdId: String) async -> String? {
+        await changeBudget(householdId: householdId) { service, month in
+            _ = try await service.reopenMonth(householdId: householdId, month: month)
+        }
+    }
+
+    /// Aktion am Budget ausführen und danach neu laden, auch nach einem Fehler (der Stand kann
+    /// sich teilweise geändert haben). Eine abgelaufene Sitzung meldet ab.
+    private func changeBudget(
+        householdId: String, _ action: (FreiraumService, YearMonth) async throws -> Void
+    ) async -> String? {
+        guard let service else { return "Nicht angemeldet." }
+        var message: String?
+        do {
+            try await action(service, month)
+        } catch {
+            if let api = error as? APIError, case .unauthorized = api {
+                report(error)
+                return nil
+            }
+            message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+        await reload(householdId: householdId)
+        return message
+    }
+
+    // MARK: Auswertungen (Mac)
+
+    /// Auswertung eines Haushalts für den angezeigten Monat und `analyticsPeriod` laden. Der
+    /// Zeitraum beginnt frühestens mit dem Budgetbeginn (ADR 0005).
+    func loadAnalytics(householdId: String) async {
+        guard let service else { return }
+        let to = month
+        let start = budgets[householdId]?.startMonth
+        let period = analyticsPeriod.range(to: to, budgetStart: start)
+        let history = AnalyticsPeriod.history(to: to, budgetStart: start)
+        isLoadingAnalytics = true
+        defer { isLoadingAnalytics = false }
+        do {
+            async let summary = service.metrics(householdId: householdId, from: period.lowerBound, to: period.upperBound)
+            async let past = service.metrics(householdId: householdId, from: history.lowerBound, to: history.upperBound)
+            async let flow = service.flow(householdId: householdId, from: period.lowerBound, to: period.upperBound)
+            async let anomalies = service.anomalies(householdId: householdId, month: to)
+            async let goals = service.goals(householdId: householdId)
+            async let ownership = service.ownershipCosts(householdId: householdId, from: period.lowerBound, to: period.upperBound)
+            let (s, h, f, a, g, o) = try await (summary, past, flow, anomalies, goals, ownership)
+            flows[householdId] = f
+            analytics[householdId] = AnalyticsState(summary: s, history: h, flow: f, anomalies: a, goals: g, ownership: o)
+        } catch {
+            report(error)
+        }
+    }
+
+    // MARK: Menüleiste (Mac)
+
+    /// Privater Haushalt im laufenden Monat, alle wartenden Buchungen, nächste Auffälligkeit.
+    var menuBar: MenuBarState {
+        MenuBarState(
+            budget: menuBarBudget, household: privateHousehold ?? households.first,
+            pendingCount: pending.count, anomalies: menuBarAnomalies
+        )
+    }
+
+    /// Budget und Auffälligkeiten des laufenden Monats für die Menüleiste laden. Fehler zeigt
+    /// sie nicht an (die Menüleiste bleibt beim letzten Stand), nur eine abgelaufene Sitzung.
+    func refreshMenuBar() async {
+        guard let service, let household = privateHousehold ?? households.first else { return }
+        let current = YearMonth.current()
+        do {
+            if month == current, let budget = budgets[household.id] {
+                menuBarBudget = budget
+            } else {
+                menuBarBudget = try await service.budget(householdId: household.id, month: current)
+            }
+            menuBarAnomalies = try await service.anomalies(householdId: household.id, month: current)
+        } catch {
+            if let api = error as? APIError, case .unauthorized = api { report(error) }
+        }
+    }
+
+    /// Am Mac läuft die App mit der Menüleiste weiter, auch ohne Fenster: alle 15 Minuten neu
+    /// laden. Neue wartende Buchungen werden gemeldet, solange die App nicht im Vordergrund ist.
+    private func startPeriodicRefresh() {
+        #if os(macOS)
+        guard refreshLoop == nil else { return }
+        refreshLoop = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(15 * 60))
+                guard let self else { return }
+                if self.isSignedIn {
+                    await self.load(notify: !NSApplication.shared.isActive)
+                }
+            }
+        }
+        #endif
     }
 
     // MARK: Hintergrund
