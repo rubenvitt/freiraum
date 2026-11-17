@@ -92,8 +92,13 @@ extension SplitTarget {
 }
 
 extension Split {
-    var api: Components.Schemas.Split {
-        .init(kind: target.apiKind, potId: target.potId, amountCents: amountCents)
+    /// Eingabe für `PUT /v1/transactions/{id}/splits` (`SplitInput` = `Split`, potId und personId optional).
+    /// Übernommen aus FREI-29 (PR #20), das zusätzlich `personId` für Einzahlung und Ausgleich setzt.
+    var api: Components.Schemas.SplitInput {
+        .init(
+            value1: .init(kind: target.apiKind, potId: target.potId, personId: nil, amountCents: amountCents),
+            value2: .init(potId: target.potId, personId: nil)
+        )
     }
 }
 
