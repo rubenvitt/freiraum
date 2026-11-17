@@ -369,6 +369,28 @@ components:
             - string
             - "null"
           format: date-time
+        balance:
+          type:
+            - object
+            - "null"
+          properties:
+            cents:
+              type: integer
+            date:
+              type: string
+              format: date
+              example: 2026-11-03
+              description: Stand am Ende dieses Tages
+            source:
+              type: string
+              enum:
+                - manuell
+                - anbieter
+          required:
+            - cents
+            - date
+            - source
+          description: Bekannter Kontostand, Grundlage des Anfangsbestands im Budget
       required:
         - id
         - householdId
@@ -378,6 +400,7 @@ components:
         - currency
         - createdAt
         - lastImportAt
+        - balance
     ImportResult:
       type: object
       properties:
@@ -729,6 +752,67 @@ components:
         - sortOrder
         - archived
         - createdAt
+    BudgetStart:
+      type: object
+      properties:
+        householdId:
+          type: string
+          format: uuid
+        month:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+          description: Startmonat; Buchungen davor zählen nicht im Budget
+        openingBalanceCents:
+          type: integer
+          description: Anfangsbestand = Summe der Konten; Konten ohne Kontostand zählen mit 0
+        accounts:
+          type: array
+          items:
+            type: object
+            properties:
+              accountId:
+                type: string
+                format: uuid
+              name:
+                type: string
+              balance:
+                type:
+                  - object
+                  - "null"
+                properties:
+                  cents:
+                    type: integer
+                  date:
+                    type: string
+                    format: date
+                    example: 2026-11-03
+                    description: Stand am Ende dieses Tages
+                  source:
+                    type: string
+                    enum:
+                      - manuell
+                      - anbieter
+                required:
+                  - cents
+                  - date
+                  - source
+                description: Bekannter Kontostand
+              openingBalanceCents:
+                type:
+                  - integer
+                  - "null"
+                description: "Stand zu Beginn des Startmonats: Kontostand − Buchungen ab Startmonat bis zum Stichtag; null ohne Kontostand"
+            required:
+              - accountId
+              - name
+              - balance
+              - openingBalanceCents
+      required:
+        - householdId
+        - month
+        - openingBalanceCents
+        - accounts
     BudgetMonth:
       type: object
       properties:
@@ -739,6 +823,11 @@ components:
           type: string
           pattern: ^\d{4}-(0[1-9]|1[0-2])$
           example: 2026-11
+        budgetStartMonth:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+          description: Budgetbeginn des Haushalts; Monate davor sind leer
         closedAt:
           type:
             - string
@@ -746,7 +835,10 @@ components:
           format: date-time
         readyToAssignCents:
           type: integer
-          description: "„Noch ohne Aufgabe“: Einnahmen bis zum Monat − Einzahlungen ins Gemeinsame − alle Zuweisungen (auch spätere Monate) − Überziehung der Vormonate"
+          description: "„Noch ohne Aufgabe“: Anfangsbestand + Einnahmen bis zum Monat − Einzahlungen ins Gemeinsame − alle Zuweisungen (auch spätere Monate) − Überziehung der Vormonate"
+        openingBalanceCents:
+          type: integer
+          description: Anfangsbestand (Summe der Kontostände zum Budgetbeginn), nur im Startmonat, sonst 0. Zählt zu „Noch ohne Aufgabe“, nicht zu den Einnahmen
         inflowsCents:
           type: integer
           description: Einnahmen im Monat; im gemeinsamen Haushalt samt Einzahlungen der Personen
@@ -771,8 +863,10 @@ components:
       required:
         - householdId
         - month
+        - budgetStartMonth
         - closedAt
         - readyToAssignCents
+        - openingBalanceCents
         - inflowsCents
         - contributionsCents
         - assignedCents
@@ -2045,6 +2139,169 @@ paths:
                 $ref: "#/components/schemas/Error"
         "422":
           description: Plan passt nicht zum Topf-Typ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/households/{householdId}/budget-start:
+    get:
+      tags:
+        - Budget
+      summary: Budgetbeginn und Anfangsbestand eines Haushalts
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+      responses:
+        "200":
+          description: Budgetbeginn
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BudgetStart"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      tags:
+        - Budget
+      summary: Budgetbeginn festlegen
+      description: Buchungen vor dem Startmonat zählen nicht im Budget (Import und Serien behalten sie). Geht nur, solange kein Monat abgeschlossen ist und vor dem neuen Start keine eigene Zuweisung liegt. Rückt der Start nach vorn, bekommen die neu hinzukommenden Buchungen Vorschläge.
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+      requestBody:
+        description: Neuer Startmonat
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                month:
+                  type: string
+                  pattern: ^\d{4}-(0[1-9]|1[0-2])$
+                  example: 2026-11
+              required:
+                - month
+      responses:
+        "200":
+          description: Budgetbeginn nach der Änderung
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BudgetStart"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Monat abgeschlossen oder Zuweisungen vor dem neuen Start
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/accounts/{accountId}/balance:
+    put:
+      tags:
+        - Budget
+      summary: Kontostand von Hand erfassen
+      description: Stand am Ende des Tages `date`, einschließlich aller Buchungen bis dahin. Daraus leitet sich der Anfangsbestand zum Budgetbeginn ab. Ersetzt einen bekannten Kontostand.
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: accountId
+          in: path
+      requestBody:
+        description: Kontostand
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                balanceCents:
+                  type: integer
+                  minimum: -100000000000
+                  maximum: 100000000000
+                  description: Betrag in Cent; negativ = Ausgang
+                  example: -1299
+                date:
+                  type: string
+                  format: date
+                  example: 2026-11-03
+              required:
+                - balanceCents
+                - date
+      responses:
+        "200":
+          description: Budgetbeginn des Haushalts nach der Änderung
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BudgetStart"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Konto nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Stichtag in der Zukunft
           content:
             application/json:
               schema:

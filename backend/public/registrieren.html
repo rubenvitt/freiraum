@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Freiraum · Passkey einrichten</title>
+    <link rel="stylesheet" href="/registrieren.css" />
+    <script type="module" src="/registrieren.js"></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="marke">Freiraum</p>
+        <h1>Passkey einrichten</h1>
+        <p class="hinweis">
+          Mit einer Einladung legst du einen Passkey für dieses Gerät an. Das gilt für den ersten
+          Passkey, für weitere Geräte und für die Wiederherstellung.
+        </p>
+      </header>
+
+      <p id="umgebung" class="meldung fehler" role="alert" hidden></p>
+
+      <section aria-labelledby="titel-anlegen">
+        <h2 id="titel-anlegen">Passkey anlegen</h2>
+        <form id="form-anlegen" novalidate>
+          <label for="token">Einladungs-Token</label>
+          <input
+            id="token"
+            name="token"
+            type="text"
+            placeholder="fre_…"
+            autocomplete="off"
+            autocapitalize="off"
+            autocorrect="off"
+            spellcheck="false"
+            inputmode="text"
+            required
+          />
+          <p class="klein">
+            Kommt aus <code>cli person-anlegen</code> oder <code>cli einladen</code>. Es wird nicht
+            gespeichert und ist nach dem Anlegen verbraucht.
+          </p>
+          <button id="knopf-anlegen" type="submit">Passkey anlegen</button>
+        </form>
+        <p id="meldung-anlegen" class="meldung" role="status" aria-live="polite" hidden></p>
+      </section>
+
+      <section aria-labelledby="titel-testen">
+        <h2 id="titel-testen">Anmelden testen</h2>
+        <p class="klein">
+          Prüft die Anmeldung mit einem vorhandenen Passkey und zeigt deinen Namen. Die Sitzung
+          wird danach sofort wieder beendet.
+        </p>
+        <button id="knopf-testen" type="button" class="zweitrangig">Anmelden testen</button>
+        <p id="meldung-testen" class="meldung" role="status" aria-live="polite" hidden></p>
+      </section>
+    </main>
+  </body>
+</html>

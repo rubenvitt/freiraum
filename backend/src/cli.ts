@@ -39,13 +39,13 @@ async function main(args: string[]): Promise<number> {
         const person = await auth.createPerson(name)
         const invitation = await auth.createInvitation(person.id)
         console.log(`Person angelegt: ${person.displayName} (${person.id})`)
-        printInvitation(invitation)
+        printInvitation(invitation, config.webauthn.origins[0])
         return 0
       }
       case 'einladen': {
         const personId = rest[0]
         if (!personId) throw new Error('Person-ID fehlt')
-        printInvitation(await auth.createInvitation(personId))
+        printInvitation(await auth.createInvitation(personId), config.webauthn.origins[0])
         return 0
       }
       case 'personen': {
@@ -74,9 +74,11 @@ async function main(args: string[]): Promise<number> {
   }
 }
 
-function printInvitation(inv: { token: string; expiresAt: Date }): void {
+function printInvitation(inv: { token: string; expiresAt: Date }, origin?: string): void {
   console.log(`Einladungs-Token (einmalig, gültig bis ${inv.expiresAt.toISOString()}):`)
   console.log(inv.token)
+  // Das Token steht im Fragment (#…): Der Browser schickt es nie an den Server.
+  if (origin) console.log(`Im Browser einlösen: ${origin}/registrieren#token=${inv.token}`)
 }
 
 main(process.argv.slice(2)).then(

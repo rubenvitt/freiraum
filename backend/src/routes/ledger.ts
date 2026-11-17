@@ -34,6 +34,14 @@ const AccountSchema = z
     currency: z.literal('EUR'),
     createdAt: z.iso.datetime(),
     lastImportAt: z.iso.datetime().nullable(),
+    balance: z
+      .object({
+        cents: z.number().int(),
+        date: IsoDate.openapi({ description: 'Stand am Ende dieses Tages' }),
+        source: z.enum(['manuell', 'anbieter']),
+      })
+      .nullable()
+      .openapi({ description: 'Bekannter Kontostand, Grundlage des Anfangsbestands im Budget' }),
   })
   .openapi('Account')
 

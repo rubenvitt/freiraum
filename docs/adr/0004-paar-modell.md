@@ -93,6 +93,9 @@ Buchungen von Hand zu (oder legt eine Regel an, die sie neu vorschlägt).
 
 ## Folgen
 
+- Budgetbeginn (ADR 0003): Einzahlungen vor dem Startmonat zählen nicht im Budget, und vorher gibt
+  es auch keinen Abgleich (wie bei allen Vorschlägen). Soll/Ist der Einzahlungen und der Ausgleich
+  sind Forderungen zwischen den Personen und rechnen unabhängig davon.
 - Die Sparquote als Kennzahl fehlt noch. Sie wird mit den Auswertungen (E5) definiert und dann als
   weitere Freigabe ergänzt.
 - Ausgaben vom gemeinsamen Konto für einen privaten Topf (umgekehrter Ausgleich) und das Verrechnen

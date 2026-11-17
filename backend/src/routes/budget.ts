@@ -2,7 +2,7 @@ import { createRoute, type OpenAPIHono, z } from '@hono/zod-openapi'
 import type { AppEnv } from '../app.js'
 import { requireAuth } from '../auth/middleware.js'
 import type { BudgetMonthView, Pot } from '../budget/service.js'
-import { Cents, error, json, Month, pathId } from './common.js'
+import { Cents, error, IsoDate, json, Month, pathId } from './common.js'
 
 const PotKind = z.enum(['monatlich', 'ruecklage', 'ziel', 'erst_ich']).openapi({
   description:
@@ -63,14 +63,25 @@ const BudgetMonthSchema = z
   .object({
     householdId: z.uuid(),
     month: Month,
+    budgetStartMonth: Month.openapi({
+      description: 'Budgetbeginn des Haushalts; Monate davor sind leer',
+    }),
     closedAt: z.iso.datetime().nullable(),
     readyToAssignCents: z
       .number()
       .int()
       .openapi({
         description:
-          '„Noch ohne Aufgabe“: Einnahmen bis zum Monat − Einzahlungen ins Gemeinsame − alle ' +
-          'Zuweisungen (auch spätere Monate) − Überziehung der Vormonate',
+          '„Noch ohne Aufgabe“: Anfangsbestand + Einnahmen bis zum Monat − Einzahlungen ins ' +
+          'Gemeinsame − alle Zuweisungen (auch spätere Monate) − Überziehung der Vormonate',
+      }),
+    openingBalanceCents: z
+      .number()
+      .int()
+      .openapi({
+        description:
+          'Anfangsbestand (Summe der Kontostände zum Budgetbeginn), nur im Startmonat, sonst 0. ' +
+          'Zählt zu „Noch ohne Aufgabe“, nicht zu den Einnahmen',
       }),
     inflowsCents: z.number().int().openapi({
       description: 'Einnahmen im Monat; im gemeinsamen Haushalt samt Einzahlungen der Personen',
@@ -90,6 +101,38 @@ const BudgetMonthSchema = z
     pots: z.array(BudgetPotSchema),
   })
   .openapi('BudgetMonth')
+
+const BalanceSchema = z.object({
+  cents: z.number().int(),
+  date: IsoDate.openapi({ description: 'Stand am Ende dieses Tages' }),
+  source: z.enum(['manuell', 'anbieter']),
+})
+
+const BudgetStartSchema = z
+  .object({
+    householdId: z.uuid(),
+    month: Month.openapi({ description: 'Startmonat; Buchungen davor zählen nicht im Budget' }),
+    openingBalanceCents: z.number().int().openapi({
+      description: 'Anfangsbestand = Summe der Konten; Konten ohne Kontostand zählen mit 0',
+    }),
+    accounts: z.array(
+      z.object({
+        accountId: z.uuid(),
+        name: z.string(),
+        balance: BalanceSchema.nullable().openapi({ description: 'Bekannter Kontostand' }),
+        openingBalanceCents: z
+          .number()
+          .int()
+          .nullable()
+          .openapi({
+            description:
+              'Stand zu Beginn des Startmonats: Kontostand − Buchungen ab Startmonat bis zum ' +
+              'Stichtag; null ohne Kontostand',
+          }),
+      }),
+    ),
+  })
+  .openapi('BudgetStart')
 
 const householdParams = z.object({ householdId: pathId('householdId') })
 const monthParams = z.object({
@@ -286,6 +329,69 @@ const reopenMonth = createRoute({
   },
 })
 
+const getStart = createRoute({
+  method: 'get',
+  path: '/v1/households/{householdId}/budget-start',
+  tags: ['Budget'],
+  summary: 'Budgetbeginn und Anfangsbestand eines Haushalts',
+  security: [{ bearerAuth: [] }],
+  middleware: [requireAuth] as const,
+  request: { params: householdParams },
+  responses: {
+    200: json(BudgetStartSchema, 'Budgetbeginn'),
+    400: error('Ungültige Anfrage'),
+    401: error('Nicht angemeldet'),
+    404: error('Haushalt nicht gefunden (oder kein Zugriff)'),
+  },
+})
+
+const setStart = createRoute({
+  method: 'put',
+  path: '/v1/households/{householdId}/budget-start',
+  tags: ['Budget'],
+  summary: 'Budgetbeginn festlegen',
+  description:
+    'Buchungen vor dem Startmonat zählen nicht im Budget (Import und Serien behalten sie). Geht ' +
+    'nur, solange kein Monat abgeschlossen ist und vor dem neuen Start keine eigene Zuweisung ' +
+    'liegt. Rückt der Start nach vorn, bekommen die neu hinzukommenden Buchungen Vorschläge.',
+  security: [{ bearerAuth: [] }],
+  middleware: [requireAuth] as const,
+  request: {
+    params: householdParams,
+    body: json(z.object({ month: Month }), 'Neuer Startmonat'),
+  },
+  responses: {
+    200: json(BudgetStartSchema, 'Budgetbeginn nach der Änderung'),
+    400: error('Ungültige Anfrage'),
+    401: error('Nicht angemeldet'),
+    404: error('Haushalt nicht gefunden (oder kein Zugriff)'),
+    409: error('Monat abgeschlossen oder Zuweisungen vor dem neuen Start'),
+  },
+})
+
+const setBalance = createRoute({
+  method: 'put',
+  path: '/v1/accounts/{accountId}/balance',
+  tags: ['Budget'],
+  summary: 'Kontostand von Hand erfassen',
+  description:
+    'Stand am Ende des Tages `date`, einschließlich aller Buchungen bis dahin. Daraus leitet ' +
+    'sich der Anfangsbestand zum Budgetbeginn ab. Ersetzt einen bekannten Kontostand.',
+  security: [{ bearerAuth: [] }],
+  middleware: [requireAuth] as const,
+  request: {
+    params: z.object({ accountId: pathId('accountId') }),
+    body: json(z.object({ balanceCents: Cents, date: IsoDate }), 'Kontostand'),
+  },
+  responses: {
+    200: json(BudgetStartSchema, 'Budgetbeginn des Haushalts nach der Änderung'),
+    400: error('Ungültige Anfrage'),
+    401: error('Nicht angemeldet'),
+    404: error('Konto nicht gefunden (oder kein Zugriff)'),
+    422: error('Stichtag in der Zukunft'),
+  },
+})
+
 const potJson = (p: Pot) => ({ ...p, createdAt: p.createdAt.toISOString() })
 const monthJson = (m: BudgetMonthView) => ({ ...m, closedAt: m.closedAt?.toISOString() ?? null })
 
@@ -311,6 +417,33 @@ export function budgetRoutes(app: OpenAPIHono<AppEnv>): void {
     const { potId } = c.req.valid('param')
     const pot = await c.var.budget.updatePot(c.var.session.person.id, potId, c.req.valid('json'))
     return c.json(potJson(pot), 200)
+  })
+
+  app.openapi(getStart, async (c) => {
+    const { householdId } = c.req.valid('param')
+    return c.json(await c.var.budget.getStart(c.var.session.person.id, householdId), 200)
+  })
+
+  app.openapi(setStart, async (c) => {
+    const { householdId } = c.req.valid('param')
+    const start = await c.var.budget.setStart(
+      c.var.session.person.id,
+      householdId,
+      c.req.valid('json').month,
+    )
+    return c.json(start, 200)
+  })
+
+  app.openapi(setBalance, async (c) => {
+    const { accountId } = c.req.valid('param')
+    const { balanceCents, date } = c.req.valid('json')
+    const start = await c.var.budget.setBalance(
+      c.var.session.person.id,
+      accountId,
+      balanceCents,
+      date,
+    )
+    return c.json(start, 200)
   })
 
   app.openapi(getMonth, async (c) => {

@@ -3,18 +3,20 @@ import type { Person } from './auth/service.js'
 import { AuthService } from './auth/service.js'
 import { BudgetService } from './budget/service.js'
 import type { LlmCategorizer } from './categorize/llm.js'
+import { OpenRouterCategorizer } from './categorize/openrouter.js'
 import { CategorizationService } from './categorize/service.js'
 import type { Config } from './config.js'
 import { CoupleService } from './couple/service.js'
 import type { Db } from './db/client.js'
 import { ApiError } from './errors.js'
-import { LedgerService } from './ledger/service.js'
+import { type ImportHooks, LedgerService } from './ledger/service.js'
 import { authRoutes } from './routes/auth.js'
 import { budgetRoutes } from './routes/budget.js'
 import { categorizeRoutes } from './routes/categorize.js'
 import { coupleRoutes } from './routes/couple.js'
 import { healthRoutes } from './routes/health.js'
 import { ledgerRoutes } from './routes/ledger.js'
+import { webRoutes } from './routes/web.js'
 
 export const API_VERSION = '0.1.0'
 
@@ -32,20 +34,32 @@ export type AppEnv = {
 
 const errorBody = (code: string, message: string) => ({ error: { code, message } })
 
+/**
+ * `llm` ersetzt das LLM aus der Konfiguration (Tests); ohne Angabe gilt `config.llm`, und ohne
+ * Konfiguration bleibt das LLM aus.
+ */
 export function createApp(deps: { db: Db; config: Config; llm?: LlmCategorizer | null }) {
+  const llm =
+    deps.llm !== undefined
+      ? deps.llm
+      : deps.config.llm
+        ? new OpenRouterCategorizer(deps.config.llm)
+        : null
   const auth = new AuthService(deps.db, deps.config)
-  const budget = new BudgetService(deps.db)
-  const categorize = new CategorizationService(deps.db, budget, deps.llm ?? null)
-  const couple = new CoupleService(deps.db, budget)
-  const ledger = new LedgerService(deps.db, {
-    // Regeln in der Import-Transaktion, LLM danach (Netzwerk, ohne offene Transaktion).
+  // Für Buchungen, die neu ins Budget kommen (Import, früherer Budgetbeginn): Regeln in der
+  // Transaktion, LLM danach (Netzwerk, ohne offene Transaktion).
+  const suggest: ImportHooks = {
     inTransaction: async (tx, ids, asOf) => {
       await categorize.applyRules(tx, ids, asOf)
     },
     afterCommit: async (ids, asOf) => {
       await categorize.suggestWithLlm(ids, asOf)
     },
-  })
+  }
+  const budget = new BudgetService(deps.db, suggest)
+  const categorize = new CategorizationService(deps.db, budget, llm)
+  const couple = new CoupleService(deps.db, budget)
+  const ledger = new LedgerService(deps.db, suggest)
 
   const app = new OpenAPIHono<AppEnv>({
     defaultHook: (result, c) => {
@@ -96,6 +110,7 @@ export function createApp(deps: { db: Db; config: Config; llm?: LlmCategorizer |
   budgetRoutes(app)
   categorizeRoutes(app)
   coupleRoutes(app)
+  webRoutes(app)
 
   app.doc31('/openapi.json', openApiInfo)
 

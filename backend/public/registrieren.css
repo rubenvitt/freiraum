@@ -1,0 +1,165 @@
+:root {
+  --hintergrund: #f4f5f7;
+  --flaeche: #ffffff;
+  --text: #14161a;
+  --leise: #5d636e;
+  --rand: #dfe2e7;
+  --akzent: #1f6f5c;
+  --akzent-text: #ffffff;
+  --erfolg-flaeche: #e6f4ee;
+  --erfolg-text: #155a3f;
+  --fehler-flaeche: #fbeceb;
+  --fehler-text: #8f2a20;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --hintergrund: #0f1113;
+    --flaeche: #1a1d21;
+    --text: #eef0f2;
+    --leise: #9aa1ab;
+    --rand: #2c3137;
+    --akzent: #4fb393;
+    --akzent-text: #06140f;
+    --erfolg-flaeche: #12291f;
+    --erfolg-text: #8fdcbc;
+    --fehler-flaeche: #2e1614;
+    --fehler-text: #f3a69c;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--hintergrund);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 17px;
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+}
+
+main {
+  max-width: 34rem;
+  margin: 0 auto;
+  padding: max(2rem, env(safe-area-inset-top)) 1rem max(2rem, env(safe-area-inset-bottom));
+}
+
+header {
+  margin-bottom: 1.5rem;
+}
+
+.marke {
+  margin: 0;
+  color: var(--akzent);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+h1 {
+  margin: 0.25rem 0 0.5rem;
+  font-size: 1.9rem;
+  line-height: 1.2;
+}
+
+h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.15rem;
+}
+
+.hinweis,
+.klein {
+  color: var(--leise);
+}
+
+.hinweis {
+  margin: 0;
+}
+
+.klein {
+  font-size: 0.9rem;
+  margin: 0.5rem 0 1rem;
+}
+
+section {
+  background: var(--flaeche);
+  border: 1px solid var(--rand);
+  border-radius: 16px;
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+input {
+  width: 100%;
+  font: inherit;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 16px;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--rand);
+  border-radius: 10px;
+  background: var(--hintergrund);
+  color: var(--text);
+}
+
+input:focus-visible,
+button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--akzent) 45%, transparent);
+  outline-offset: 2px;
+}
+
+button {
+  width: 100%;
+  font: inherit;
+  font-weight: 600;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--akzent);
+  border-radius: 12px;
+  background: var(--akzent);
+  color: var(--akzent-text);
+  cursor: pointer;
+}
+
+button.zweitrangig {
+  background: transparent;
+  color: var(--akzent);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.85em;
+}
+
+.meldung {
+  margin: 1rem 0 0;
+  padding: 0.75rem 0.9rem;
+  border-radius: 10px;
+}
+
+.meldung.erfolg {
+  background: var(--erfolg-flaeche);
+  color: var(--erfolg-text);
+}
+
+.meldung.fehler {
+  background: var(--fehler-flaeche);
+  color: var(--fehler-text);
+}
+
+#umgebung {
+  margin: 0 0 1rem;
+}
