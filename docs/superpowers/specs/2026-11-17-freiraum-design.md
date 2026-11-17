@@ -28,7 +28,9 @@ Design-Entwurf: https://claude.ai/artifact/Uioh2erQiqv4nLqFDVfp6P
 
 Beide Personen nutzen iPhones, deshalb ist Web nicht Teil des ersten Wurfs.
 
-### Technik (Vorschlag, in E0 festzulegen)
+### Technik
+
+Festgelegt in [ADR 0001](../../adr/0001-technik-grundgeruest.md) (E0, FREI-1). Ursprünglicher Vorschlag:
 
 - Backend: TypeScript (z. B. Hono) + PostgreSQL, als Container auf dem Homelab (ARM64).
 - API-Vertrag: OpenAPI als Quelle der Wahrheit; Swift-Client per `swift-openapi-generator`, Web-Client generiert.
@@ -103,7 +105,7 @@ Das Repo ist öffentlich. Deshalb: keine echten Finanzdaten, Kontonamen oder Zug
 
 ## Offene Entscheidungen
 
-- Backend-Sprache (TypeScript vs. Swift/Vapor) und Framework
+- ~~Backend-Sprache und Framework~~: TypeScript + Hono, siehe ADR 0001
 - Bankanbieter (nach E1-Spike)
 - Welches LLM für Vorschläge, lokal oder per API
 - Standard-Einzahlungsregel fürs Gemeinsame

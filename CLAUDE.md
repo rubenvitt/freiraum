@@ -5,3 +5,5 @@
 - Öffentliches Repo: niemals echte Finanzdaten, Kontonamen, IBANs oder Zugangsdaten committen. Testdaten erfinden, Secrets nur per Umgebungsvariable.
 - Beträge immer als ganze Cent (Integer).
 - Privatsphäre zwischen den Personen wird serverseitig durchgesetzt, nie nur in der Oberfläche.
+- Technikentscheidungen: `docs/adr/`. Backend in `backend/` (pnpm); vor dem Commit `pnpm lint`, `pnpm typecheck`, `pnpm test`.
+- API-Änderung → `pnpm openapi` ausführen und `openapi/openapi.yaml` mitcommitten (ein Test prüft das).

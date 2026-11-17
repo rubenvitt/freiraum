@@ -1,0 +1,22 @@
+name: Backend-Image
+
+# Baut das Image bei PRs einmal (nur amd64, ohne Push), damit das Dockerfile nicht erst auf main bricht.
+on:
+  pull_request:
+    paths: ['backend/**', '.github/workflows/image-check.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
