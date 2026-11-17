@@ -34,6 +34,8 @@ export interface Account {
   currency: 'EUR'
   createdAt: Date
   lastImportAt: Date | null
+  /** Bekannter Kontostand am Ende von `date` (Grundlage des Anfangsbestands, ADR 0003). */
+  balance: { cents: number; date: IsoDate; source: 'manuell' | 'anbieter' } | null
 }
 
 export interface Transaction {
@@ -110,7 +112,12 @@ interface AccountRow {
   currency: 'EUR'
   created_at: Date
   last_import_at: Date | null
+  balance_cents: string | null
+  balance_day: string | null
+  balance_source: 'manuell' | 'anbieter' | null
 }
+
+const ACCOUNT_BALANCE = 'balance_date::text as balance_day'
 
 const toAccount = (r: AccountRow): Account => ({
   id: r.id,
@@ -121,6 +128,10 @@ const toAccount = (r: AccountRow): Account => ({
   currency: r.currency,
   createdAt: r.created_at,
   lastImportAt: r.last_import_at,
+  balance:
+    r.balance_cents === null || r.balance_day === null || r.balance_source === null
+      ? null
+      : { cents: cents(r.balance_cents), date: r.balance_day, source: r.balance_source },
 })
 
 interface SeriesRow {
@@ -221,7 +232,7 @@ export class LedgerService {
     const [row] = await this.db<AccountRow[]>`
       insert into accounts (household_id, name, source, iban)
       values (${input.householdId}, ${input.name.trim()}, ${input.source}, ${iban})
-      returning *, null::timestamptz as last_import_at
+      returning *, ${this.db.unsafe(ACCOUNT_BALANCE)}, null::timestamptz as last_import_at
     `
     if (!row) throw new Error('Konto konnte nicht angelegt werden')
     return toAccount(row)
@@ -229,7 +240,7 @@ export class LedgerService {
 
   async listAccounts(personId: string): Promise<Account[]> {
     const rows = await this.db<AccountRow[]>`
-      select a.*, (select max(r.created_at) from import_runs r where r.account_id = a.id)
+      select a.*, ${this.db.unsafe(`a.${ACCOUNT_BALANCE}`)}, (select max(r.created_at) from import_runs r where r.account_id = a.id)
                as last_import_at
       from accounts a
       join household_members m on m.household_id = a.household_id and m.person_id = ${personId}

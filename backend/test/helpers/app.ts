@@ -6,6 +6,8 @@ import { createDb, type Db } from '../../src/db/client.js'
 import { TEST_DATABASE_URL } from './env.js'
 
 export const ORIGIN = 'https://freiraum.test'
+/** Budgetbeginn der Test-Haushalte, vor allen Testbuchungen. */
+export const LONG_AGO = '2020-01-01'
 
 export const testConfig: Config = {
   port: 0,
@@ -41,6 +43,11 @@ export function setupTestApp(options: { llm?: LlmCategorizer } = {}) {
   /** Person mit Sitzung anlegen, ohne Passkey-Ablauf (der ist in auth.test.ts geprüft). */
   const personWithSession = async (name: string) => {
     const person = await auth.createPerson(name)
+    // Neue Haushalte starten im laufenden Monat. Die meisten Tests rechnen mit Buchungen aus
+    // Vormonaten, deshalb beginnt das Budget hier weit früher (Budgetbeginn: budget-start.test.ts).
+    await db`
+      update households set budget_start_month = ${LONG_AGO} where owner_person_id = ${person.id}
+    `
     const token = newToken('frs')
     await db`
       insert into sessions (person_id, token_hash, expires_at)

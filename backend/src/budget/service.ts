@@ -13,18 +13,18 @@ import { cents } from '../db/cents.js'
 import type { Db } from '../db/client.js'
 import { ApiError } from '../errors.js'
 import { type IsoDate, todayUtc } from '../ledger/dates.js'
+import type { ImportHooks } from '../ledger/service.js'
 import {
   type AssignmentSource,
   type BudgetData,
   computeMonth,
   erstIchAssignments,
-  firstMonth,
   type MonthBudget,
   type PotKind,
   type PotMonth,
   readyToAssignFor,
 } from './compute.js'
-import { addMonthsTo, firstDay, type Month, monthOf } from './months.js'
+import { addMonthsTo, firstDay, type Month, maxMonth, monthOf } from './months.js'
 
 type Sql = Db | TransactionSql
 
@@ -63,9 +63,29 @@ export interface BudgetPotView extends PotMonth {
 
 export interface BudgetMonthView extends Omit<MonthBudget, 'pots'> {
   householdId: string
+  budgetStartMonth: Month
   closedAt: Date | null
   unconfirmedTransactions: number
   pots: BudgetPotView[]
+}
+
+export type BalanceSource = 'manuell' | 'anbieter'
+
+export interface AccountOpening {
+  accountId: string
+  name: string
+  /** Bekannter Kontostand (Ende des Stichtags), oder null, wenn keiner erfasst ist. */
+  balance: { cents: number; date: IsoDate; source: BalanceSource } | null
+  /** Daraus abgeleiteter Stand zu Beginn des Startmonats (null ohne Kontostand). */
+  openingBalanceCents: number | null
+}
+
+export interface BudgetStart {
+  householdId: string
+  month: Month
+  /** Summe der Anfangsbestände; Konten ohne Kontostand zählen mit 0. */
+  openingBalanceCents: number
+  accounts: AccountOpening[]
 }
 
 interface PotRow {
@@ -132,7 +152,14 @@ const isUniqueViolation = (err: unknown) =>
   typeof err === 'object' && err !== null && (err as { code?: string }).code === '23505'
 
 export class BudgetService {
-  constructor(private readonly db: Db) {}
+  /**
+   * `hooks` laufen für Buchungen, die durch einen früheren Budgetbeginn neu ins Budget kommen
+   * (Regeln in der Transaktion, LLM danach), wie beim Import.
+   */
+  constructor(
+    private readonly db: Db,
+    private readonly hooks: ImportHooks = {},
+  ) {}
 
   // --- Zugriff -----------------------------------------------------------------
 
@@ -155,6 +182,18 @@ export class BudgetService {
 
   private async lockHousehold(tx: TransactionSql, householdId: string): Promise<void> {
     await tx`select id from households where id = ${householdId} for update`
+  }
+
+  /** Monate vor dem Budgetbeginn nehmen keine Zuweisungen und keinen Abschluss an. */
+  private async requireStarted(sql: Sql, householdId: string, month: Month): Promise<void> {
+    const start = await this.startMonth(sql, householdId)
+    if (month < start) {
+      throw new ApiError(
+        409,
+        'vor_budgetbeginn',
+        `Das Budget beginnt erst im Monat ${start}; ${month} liegt davor.`,
+      )
+    }
   }
 
   /** Topf, sofern die Person Mitglied seines Haushalts ist; sonst 404. */
@@ -294,6 +333,7 @@ export class BudgetService {
 
   /** Alles, was die Budgetrechnung eines Haushalts braucht (Mengen sind klein: zwei Personen). */
   async loadData(sql: Sql, householdId: string): Promise<BudgetData & { potRows: Pot[] }> {
+    const start = await this.loadStart(sql, householdId)
     const pots = (
       await sql<PotRow[]>`
         select ${sql.unsafe(POT_COLUMNS)} from pots
@@ -346,6 +386,214 @@ export class BudgetService {
         amountCents: cents(a.amount_cents),
       })),
       inflows: inflows.map((i) => ({ month: i.month, amountCents: cents(i.amount_cents) })),
+      start: { month: start.month, openingBalanceCents: start.openingBalanceCents },
+    }
+  }
+
+  // --- Budgetbeginn und Anfangsbestand -----------------------------------------
+
+  private async startMonth(sql: Sql, householdId: string): Promise<Month> {
+    const [row] = await sql<{ month: string }[]>`
+      select to_char(budget_start_month, 'YYYY-MM') as month from households
+      where id = ${householdId}
+    `
+    if (!row) throw householdNotFound()
+    return row.month
+  }
+
+  /**
+   * Startmonat und Anfangsbestand je Konto. Der Anfangsbestand ist der Stand am Ende des
+   * Vortags des Startmonats: bekannter Kontostand − Buchungen ab Monatsbeginn bis zum Stichtag
+   * (+ Buchungen nach dem Stichtag bis vor den Start, falls der Stichtag früher liegt).
+   */
+  private async loadStart(sql: Sql, householdId: string): Promise<BudgetStart> {
+    const month = await this.startMonth(sql, householdId)
+    const startDay = firstDay(month)
+    const rows = await sql<
+      {
+        id: string
+        name: string
+        balance_cents: string | null
+        balance_date: string | null
+        balance_source: BalanceSource | null
+        after_start: string
+        before_start: string
+      }[]
+    >`
+      select a.id, a.name, a.balance_cents, a.balance_date::text, a.balance_source,
+        coalesce(sum(t.amount_cents) filter (
+          where t.booking_date >= ${startDay} and t.booking_date <= a.balance_date), 0
+        ) as after_start,
+        coalesce(sum(t.amount_cents) filter (
+          where t.booking_date > a.balance_date and t.booking_date < ${startDay}), 0
+        ) as before_start
+      from accounts a
+      left join transactions t on t.account_id = a.id
+      where a.household_id = ${householdId}
+      group by a.id
+      order by a.created_at, a.id
+    `
+    const accounts: AccountOpening[] = rows.map((r) => {
+      if (r.balance_cents === null || r.balance_date === null || r.balance_source === null) {
+        return { accountId: r.id, name: r.name, balance: null, openingBalanceCents: null }
+      }
+      const balance = cents(r.balance_cents)
+      return {
+        accountId: r.id,
+        name: r.name,
+        balance: { cents: balance, date: r.balance_date, source: r.balance_source },
+        openingBalanceCents: balance - cents(r.after_start) + cents(r.before_start),
+      }
+    })
+    return {
+      householdId,
+      month,
+      openingBalanceCents: accounts.reduce((sum, a) => sum + (a.openingBalanceCents ?? 0), 0),
+      accounts,
+    }
+  }
+
+  async getStart(personId: string, householdId: string): Promise<BudgetStart> {
+    await this.householdAccess(this.db, personId, householdId)
+    return this.loadStart(this.db, householdId)
+  }
+
+  /**
+   * Startmonat ändern. Geht nur, solange kein Monat abgeschlossen ist (sonst stimmt die
+   * Reihenfolge der Abschlüsse nicht mehr) und keine eigene Zuweisung (≠ 0) vor dem neuen
+   * Start liegt. Übrige Zuweisungen davor (Automatik, 0) werden entfernt. Rückt der Start nach vorn, bekommen
+   * die Buchungen, die neu ins Budget kommen, Vorschläge.
+   */
+  async setStart(
+    personId: string,
+    householdId: string,
+    month: Month,
+    asOf: IsoDate = todayUtc(),
+  ): Promise<BudgetStart> {
+    const entered = await this.db.begin(async (tx) => {
+      await this.householdAccess(tx, personId, householdId)
+      // Sperrreihenfolge wie überall: erst Konten, dann Haushalt.
+      await tx`select id from accounts where household_id = ${householdId} order by id for update`
+      await this.lockHousehold(tx, householdId)
+      const previous = await this.startMonth(tx, householdId)
+      if (previous === month) return []
+      if ((await this.closedMonths(tx, householdId)).size > 0) {
+        throw new ApiError(
+          409,
+          'budgetbeginn_fest',
+          'Der Budgetbeginn lässt sich nur ändern, solange kein Monat abgeschlossen ist.',
+        )
+      }
+      const [manual] = await tx<{ month: string }[]>`
+        select to_char(min(a.month), 'YYYY-MM') as month
+        from pot_assignments a join pots p on p.id = a.pot_id
+        where p.household_id = ${householdId} and a.source = 'manuell' and a.amount_cents <> 0
+          and a.month < ${firstDay(month)}
+      `
+      if (manual?.month) {
+        throw new ApiError(
+          409,
+          'zuweisungen_vor_budgetbeginn',
+          `Im Monat ${manual.month} gibt es schon Zuweisungen. Erst dort auf 0 setzen, dann ` +
+            'den Budgetbeginn verschieben.',
+        )
+      }
+      // Was jetzt noch davor liegt, ist von der Automatik oder 0.
+      await tx`
+        delete from pot_assignments a using pots p
+        where p.id = a.pot_id and p.household_id = ${householdId}
+          and a.month < ${firstDay(month)}
+      `
+      await tx`
+        update households set budget_start_month = ${firstDay(month)} where id = ${householdId}
+      `
+      let ids: string[] = []
+      if (month < previous) {
+        ids = (
+          await tx<{ id: string }[]>`
+            select t.id from transactions t join accounts a on a.id = t.account_id
+            where a.household_id = ${householdId} and t.status <> 'bestaetigt'
+              and t.booking_date >= ${firstDay(month)} and t.booking_date < ${firstDay(previous)}
+          `
+        ).map((r) => r.id)
+        if (ids.length > 0) await this.hooks.inTransaction?.(tx, ids, asOf)
+      }
+      await this.refillErstIch(tx, householdId, asOf)
+      return ids
+    })
+    if (entered.length > 0 && this.hooks.afterCommit) {
+      try {
+        await this.hooks.afterCommit(entered, asOf)
+      } catch (err) {
+        console.error(
+          'Vorschläge nach dem Budgetbeginn fehlgeschlagen',
+          err instanceof Error ? err.message : err,
+        )
+      }
+    }
+    return this.loadStart(this.db, householdId)
+  }
+
+  /** Kontostand von Hand erfassen (Stand am Ende des Tages `date`). */
+  async setBalance(
+    personId: string,
+    accountId: string,
+    balanceCents: number,
+    date: IsoDate,
+    asOf: IsoDate = todayUtc(),
+  ): Promise<BudgetStart> {
+    if (date > asOf) {
+      throw new ApiError(
+        422,
+        'kontostand_in_zukunft',
+        'Ein Kontostand gilt für heute oder einen vergangenen Tag.',
+      )
+    }
+    const householdId = await this.db.begin(async (tx) => {
+      const [account] = await tx<{ household_id: string }[]>`
+        select a.household_id from accounts a
+        join household_members m on m.household_id = a.household_id and m.person_id = ${personId}
+        where a.id = ${accountId}
+        for update of a
+      `
+      if (!account) {
+        throw new ApiError(404, 'konto_nicht_gefunden', 'Dieses Konto gibt es nicht.')
+      }
+      await this.recordBalance(tx, accountId, balanceCents, date, 'manuell', asOf)
+      return account.household_id
+    })
+    return this.loadStart(this.db, householdId)
+  }
+
+  /**
+   * Kontostand speichern und Erst-ich neu füllen (der Anfangsbestand ändert „Noch ohne
+   * Aufgabe“). Für den Abruf beim Anbieter (FREI-12) mit `source = 'anbieter'`. Erwartet eine
+   * offene Transaktion, in der das Konto schon gesperrt ist.
+   */
+  async recordBalance(
+    tx: TransactionSql,
+    accountId: string,
+    balanceCents: number,
+    date: IsoDate,
+    source: BalanceSource,
+    asOf: IsoDate = todayUtc(),
+  ): Promise<void> {
+    const [row] = await tx<{ household_id: string }[]>`
+      update accounts set balance_cents = ${balanceCents}, balance_date = ${date},
+        balance_source = ${source}, balance_updated_at = now()
+      where id = ${accountId}
+      returning household_id
+    `
+    if (!row) throw new ApiError(404, 'konto_nicht_gefunden', 'Dieses Konto gibt es nicht.')
+    await this.refillErstIch(tx, row.household_id, asOf)
+  }
+
+  /** Erst-ich in allen offenen Monaten vom Budgetbeginn bis zum laufenden Monat neu füllen. */
+  private async refillErstIch(tx: TransactionSql, householdId: string, asOf: IsoDate) {
+    const start = await this.startMonth(tx, householdId)
+    const current = monthOf(asOf)
+    for (let m = start; m <= current; m = addMonthsTo(m, 1)) {
+      await this.runErstIch(tx, householdId, m, asOf)
     }
   }
 
@@ -361,11 +609,13 @@ export class BudgetService {
     const data = await this.loadData(sql, householdId)
     const budget = computeMonth(data, month)
     const closed = await this.closedMonths(sql, householdId)
+    const startMonth = data.start?.month ?? month
+    // Vor dem Budgetbeginn wartet nichts auf Bestätigung, was fürs Budget zählt.
     const [pending] = await sql<{ n: number }[]>`
       select count(*)::int as n from transactions t
       join accounts a on a.id = t.account_id
       where a.household_id = ${householdId} and t.status <> 'bestaetigt'
-        and t.booking_date >= ${firstDay(month)}
+        and t.booking_date >= ${firstDay(maxMonth(month, startMonth))}
         and t.booking_date < ${firstDay(addMonthsTo(month, 1))}
     `
     const byId = new Map(data.potRows.map((p) => [p.id, p]))
@@ -392,6 +642,7 @@ export class BudgetService {
     return {
       ...budget,
       householdId,
+      budgetStartMonth: startMonth,
       closedAt: closed.get(month) ?? null,
       unconfirmedTransactions: pending?.n ?? 0,
       pots,
@@ -425,6 +676,7 @@ export class BudgetService {
       if ((await this.closedMonths(tx, householdId)).has(month)) {
         throw new ApiError(409, 'monat_abgeschlossen', `Der Monat ${month} ist abgeschlossen.`)
       }
+      await this.requireStarted(tx, householdId, month)
       const data = await this.loadData(tx, householdId)
       const previous = data.assignments.find((a) => a.potId === potId && a.month === month)
       const delta = amountCents - (previous?.amountCents ?? 0)
@@ -477,6 +729,7 @@ export class BudgetService {
       if ((await this.closedMonths(tx, householdId)).has(month)) {
         throw new ApiError(409, 'monat_abgeschlossen', `Der Monat ${month} ist abgeschlossen.`)
       }
+      await this.requireStarted(tx, householdId, month)
       await this.runErstIch(tx, householdId, month, asOf)
       return this.view(tx, householdId, month)
     })
@@ -494,10 +747,16 @@ export class BudgetService {
     asOf: IsoDate = todayUtc(),
   ): Promise<void> {
     await this.lockHousehold(tx, householdId)
+    if (month < (await this.startMonth(tx, householdId))) return
+    const [any] = await tx`
+      select 1 from pots
+      where household_id = ${householdId} and kind = 'erst_ich' and archived_at is null
+      limit 1
+    `
+    if (!any) return
     if ((await this.closedMonths(tx, householdId)).has(month)) return
     const data = await this.loadData(tx, householdId)
     const potIds = data.potRows.filter((p) => p.kind === 'erst_ich' && !p.archived).map((p) => p.id)
-    if (potIds.length === 0) return
     const amounts = erstIchAssignments(data, potIds, month, monthOf(asOf))
     for (const [potId, amount] of amounts) {
       const previous = data.assignments.find((a) => a.potId === potId && a.month === month)
@@ -548,16 +807,15 @@ export class BudgetService {
           `Der Monat ${month} ist schon abgeschlossen.`,
         )
       }
-      const start = firstMonth(await this.loadData(tx, householdId))
-      if (start !== null) {
-        for (let m = start; m < month; m = addMonthsTo(m, 1)) {
-          if (!closed.has(m)) {
-            throw new ApiError(
-              409,
-              'vormonat_offen',
-              `Erst den Monat ${m} abschließen, Monate werden der Reihe nach abgeschlossen.`,
-            )
-          }
+      await this.requireStarted(tx, householdId, month)
+      const start = await this.startMonth(tx, householdId)
+      for (let m = start; m < month; m = addMonthsTo(m, 1)) {
+        if (!closed.has(m)) {
+          throw new ApiError(
+            409,
+            'vormonat_offen',
+            `Erst den Monat ${m} abschließen, Monate werden der Reihe nach abgeschlossen.`,
+          )
         }
       }
       const view = await this.view(tx, householdId, month)
