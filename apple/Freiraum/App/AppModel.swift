@@ -344,6 +344,69 @@ final class AppModel {
         }
     }
 
+    // MARK: Budgetbeginn und Kontostände
+
+    /// Budgetbeginn, Anfangsbestand und Kontostände; nil bei Fehler (Meldung in `errorMessage`).
+    func budgetStart(householdId: String) async -> BudgetStart? {
+        guard let service else { return nil }
+        do {
+            return try await service.budgetStart(householdId: householdId)
+        } catch {
+            reportSetup(error)
+            return nil
+        }
+    }
+
+    /// Startmonat festlegen. Abgelehnt (409), wenn schon ein Monat abgeschlossen ist oder vor dem
+    /// neuen Start Töpfe gefüllt sind.
+    func setBudgetStart(_ month: YearMonth, householdId: String) async -> BudgetStart? {
+        await changeStart(householdId: householdId) { service in
+            try await service.setBudgetStart(householdId: householdId, month: month)
+        }
+    }
+
+    /// Kontostand von Hand erfassen; daraus folgt der Anfangsbestand.
+    func setBalance(accountId: String, cents: Int, date: String, householdId: String) async -> BudgetStart? {
+        await changeStart(householdId: householdId) { service in
+            try await service.setBalance(accountId: accountId, cents: cents, date: date)
+        }
+    }
+
+    /// Konto im Haushalt anlegen (z. B. Girokonto, bevor der Kontoimport läuft).
+    func addAccount(name: String, source: Account.Source, householdId: String) async -> BudgetStart? {
+        await changeStart(householdId: householdId) { service in
+            let account = try await service.createAccount(householdId: householdId, name: name, source: source)
+            self.accounts.append(account)
+            return try await service.budgetStart(householdId: householdId)
+        }
+    }
+
+    /// Aktion am Budgetbeginn ausführen, danach das Budget des Haushalts neu laden
+    /// („Noch ohne Aufgabe“ ändert sich mit dem Anfangsbestand).
+    private func changeStart(
+        householdId: String, _ action: (FreiraumService) async throws -> BudgetStart
+    ) async -> BudgetStart? {
+        guard let service else { return nil }
+        errorMessage = nil
+        do {
+            let start = try await action(service)
+            await reload(householdId: householdId)
+            return start
+        } catch {
+            reportSetup(error)
+            return nil
+        }
+    }
+
+    /// Wie `report`, aber mit Erklärung, was bei einem Konflikt zu tun ist.
+    private func reportSetup(_ error: any Error) {
+        if let api = error as? APIError, case .unauthorized = api {
+            report(error)
+        } else if !(error is CancellationError) {
+            errorMessage = BudgetStartMessages.explain(error)
+        }
+    }
+
     // MARK: Hintergrund
 
     /// Hintergrundabruf (iOS): laden, neue Buchungen melden, Widget aktualisieren.

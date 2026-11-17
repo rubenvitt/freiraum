@@ -45,6 +45,9 @@ für iOS und macOS ohne Signatur.
 
 ## Hinweise
 
+- Neuer Haushalt: In den Einstellungen unter „Budgetbeginn und Kontostände“ den Startmonat wählen,
+  Konten anlegen (falls der Import noch keine kennt) und je Konto einen Kontostand mit Stichtag
+  eintragen. Die Summe zählt im Startmonat zu „Noch ohne Aufgabe“.
 - Barausgaben landen im Bargeldkonto des Haushalts; fehlt es, legt die App beim ersten Erfassen
   eins an. Abhebungen am Automaten als „Umbuchung“ zuordnen.
 - „Buchungen warten“ meldet die App selbst per Hintergrundabruf (etwa stündlich, iOS entscheidet).
