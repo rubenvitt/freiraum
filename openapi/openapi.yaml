@@ -1119,7 +1119,8 @@ components:
             - ruecklagen
             - einzahlung_soll
             - budget
-          description: erst_ich = ob die Erst-ich-Töpfe des Monats gefüllt sind (Anteil, kein Betrag); ruecklagen = ob die Rücklagen ihre Monatsrate haben (Anteil); einzahlung_soll = Soll der eigenen Einzahlungsregel „Prozent vom Netto“ (verrät sonst das Einkommen); budget = Budget und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern)
+            - sparquote
+          description: erst_ich = ob die Erst-ich-Töpfe des Monats gefüllt sind (Anteil, kein Betrag); ruecklagen = ob die Rücklagen ihre Monatsrate haben (Anteil); einzahlung_soll = Soll der eigenen Einzahlungsregel „Prozent vom Netto“ (verrät sonst das Einkommen); budget = Budget und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern); sparquote = Sparquote des Monats als Prozentwert (ohne Beträge)
         createdAt:
           type: string
           format: date-time
@@ -1158,18 +1159,22 @@ components:
               - ruecklagen
               - einzahlung_soll
               - budget
-            description: erst_ich = ob die Erst-ich-Töpfe des Monats gefüllt sind (Anteil, kein Betrag); ruecklagen = ob die Rücklagen ihre Monatsrate haben (Anteil); einzahlung_soll = Soll der eigenen Einzahlungsregel „Prozent vom Netto“ (verrät sonst das Einkommen); budget = Budget und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern)
+              - sparquote
+            description: erst_ich = ob die Erst-ich-Töpfe des Monats gefüllt sind (Anteil, kein Betrag); ruecklagen = ob die Rücklagen ihre Monatsrate haben (Anteil); einzahlung_soll = Soll der eigenen Einzahlungsregel „Prozent vom Netto“ (verrät sonst das Einkommen); budget = Budget und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern); sparquote = Sparquote des Monats als Prozentwert (ohne Beträge)
           description: sichtbare Kennzahlen
         erstIch:
           $ref: "#/components/schemas/PotProgress"
         ruecklagen:
           $ref: "#/components/schemas/PotProgress"
+        sparquote:
+          $ref: "#/components/schemas/SavingsRate"
       required:
         - personId
         - month
         - scopes
         - erstIch
         - ruecklagen
+        - sparquote
     PotProgress:
       type:
         - object
@@ -1191,6 +1196,18 @@ components:
         - hasPots
         - fulfilled
         - fundedPct
+    SavingsRate:
+      type:
+        - object
+        - "null"
+      properties:
+        savingsRatePct:
+          type:
+            - integer
+            - "null"
+          description: "Sparquote: (Einkommen − Konsum − Einzahlungen ins Gemeinsame) ÷ Einkommen in Prozent, abgerundet, kann negativ sein; null ohne Einkommen im Monat"
+      required:
+        - savingsRatePct
     ContributionRule:
       type: object
       properties:
@@ -3380,9 +3397,10 @@ paths:
               - ruecklagen
               - einzahlung_soll
               - budget
-            description: erst_ich = ob die Erst-ich-Töpfe des Monats gefüllt sind (Anteil, kein Betrag); ruecklagen = ob die Rücklagen ihre Monatsrate haben (Anteil); einzahlung_soll = Soll der eigenen Einzahlungsregel „Prozent vom Netto“ (verrät sonst das Einkommen); budget = Budget und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern)
+              - sparquote
+            description: erst_ich = ob die Erst-ich-Töpfe des Monats gefüllt sind (Anteil, kein Betrag); ruecklagen = ob die Rücklagen ihre Monatsrate haben (Anteil); einzahlung_soll = Soll der eigenen Einzahlungsregel „Prozent vom Netto“ (verrät sonst das Einkommen); budget = Budget und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern); sparquote = Sparquote des Monats als Prozentwert (ohne Beträge)
           required: true
-          description: erst_ich = ob die Erst-ich-Töpfe des Monats gefüllt sind (Anteil, kein Betrag); ruecklagen = ob die Rücklagen ihre Monatsrate haben (Anteil); einzahlung_soll = Soll der eigenen Einzahlungsregel „Prozent vom Netto“ (verrät sonst das Einkommen); budget = Budget und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern)
+          description: erst_ich = ob die Erst-ich-Töpfe des Monats gefüllt sind (Anteil, kein Betrag); ruecklagen = ob die Rücklagen ihre Monatsrate haben (Anteil); einzahlung_soll = Soll der eigenen Einzahlungsregel „Prozent vom Netto“ (verrät sonst das Einkommen); budget = Budget und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern); sparquote = Sparquote des Monats als Prozentwert (ohne Beträge)
           name: scope
           in: path
       responses:
@@ -3429,9 +3447,10 @@ paths:
               - ruecklagen
               - einzahlung_soll
               - budget
-            description: erst_ich = ob die Erst-ich-Töpfe des Monats gefüllt sind (Anteil, kein Betrag); ruecklagen = ob die Rücklagen ihre Monatsrate haben (Anteil); einzahlung_soll = Soll der eigenen Einzahlungsregel „Prozent vom Netto“ (verrät sonst das Einkommen); budget = Budget und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern)
+              - sparquote
+            description: erst_ich = ob die Erst-ich-Töpfe des Monats gefüllt sind (Anteil, kein Betrag); ruecklagen = ob die Rücklagen ihre Monatsrate haben (Anteil); einzahlung_soll = Soll der eigenen Einzahlungsregel „Prozent vom Netto“ (verrät sonst das Einkommen); budget = Budget und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern); sparquote = Sparquote des Monats als Prozentwert (ohne Beträge)
           required: true
-          description: erst_ich = ob die Erst-ich-Töpfe des Monats gefüllt sind (Anteil, kein Betrag); ruecklagen = ob die Rücklagen ihre Monatsrate haben (Anteil); einzahlung_soll = Soll der eigenen Einzahlungsregel „Prozent vom Netto“ (verrät sonst das Einkommen); budget = Budget und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern)
+          description: erst_ich = ob die Erst-ich-Töpfe des Monats gefüllt sind (Anteil, kein Betrag); ruecklagen = ob die Rücklagen ihre Monatsrate haben (Anteil); einzahlung_soll = Soll der eigenen Einzahlungsregel „Prozent vom Netto“ (verrät sonst das Einkommen); budget = Budget und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern); sparquote = Sparquote des Monats als Prozentwert (ohne Beträge)
           name: scope
           in: path
       responses:

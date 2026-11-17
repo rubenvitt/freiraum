@@ -15,7 +15,10 @@ const Bp = z
 const PotKind = z.enum(['monatlich', 'ruecklage', 'ziel', 'erst_ich'])
 
 const metricFields = {
-  incomeCents: z.number().int().openapi({ description: 'Einkommen: Einnahme-Aufteilungen' }),
+  incomeCents: z.number().int().openapi({
+    description:
+      'Einkommen: Einnahme-Aufteilungen; im gemeinsamen Haushalt auch die Einzahlungen der Personen',
+  }),
   consumptionCents: z
     .number()
     .int()
@@ -28,7 +31,15 @@ const metricFields = {
     .number()
     .int()
     .openapi({ description: 'Ausgaben aus Erst-ich-Töpfen (Sparen, kein Konsum)' }),
-  savedCents: z.number().int().openapi({ description: 'Einkommen − Konsum' }),
+  contributionsCents: z
+    .number()
+    .int()
+    .openapi({
+      description:
+        'Einzahlungen ins Gemeinsame vom privaten Konto (positiv = abgeflossen): kein Konsum, ' +
+        'aber auch nicht gespart',
+    }),
+  savedCents: z.number().int().openapi({ description: 'Einkommen − Konsum − Einzahlungen' }),
   savingsRateBp: Bp.openapi({ description: 'Sparquote: Gespart ÷ Einkommen, in Basispunkten' }),
   fixedCostsCents: z.number().int().openapi({
     description: 'Konsum aus wiederkehrenden Ausgängen (Miete, Versicherungen, Abos)',

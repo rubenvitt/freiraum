@@ -8,8 +8,12 @@
  *   zugeordnete Ausgänge (vorsichtig gerechnet: was nicht zugeordnet ist, gilt als ausgegeben).
  * - **Erst ich** = Ausgaben aus Erst-ich-Töpfen (Überweisung aufs Depot o. Ä.). Das ist Sparen,
  *   kein Konsum.
- * - **Gespart** = Einkommen − Konsum. Die Sparquote ist Gespart ÷ Einkommen.
- * - **Umbuchungen** zwischen eigenen Konten zählen nirgends.
+ * - **Einzahlungen** ins Gemeinsame (privates Konto) verlassen den Haushalt: kein Konsum aus
+ *   eigenen Töpfen, aber auch nicht gespart. Auf dem gemeinsamen Konto sind sie Einkommen.
+ * - **Gespart** = Einkommen − Konsum − Einzahlungen. Die Sparquote ist Gespart ÷ Einkommen.
+ * - **Umbuchungen** zwischen eigenen Konten zählen nirgends, ebenso **Ausgleich** und privat
+ *   bezahlte Ausgaben in Töpfen eines anderen (des gemeinsamen) Haushalts: Das ist eine Forderung
+ *   ans Gemeinsame, kein eigener Konsum (ADR 0006).
  */
 
 import type { PotKind } from '../budget/compute.js'
@@ -17,7 +21,7 @@ import { addMonthsTo, type Month, maxMonth, monthOf, monthsBetween } from '../bu
 import { addDays, daysBetween, type IsoDate } from '../ledger/dates.js'
 import { type Cadence, MIN_OCCURRENCES } from '../ledger/recurring.js'
 
-export type SplitKind = 'topf' | 'einnahme' | 'umbuchung'
+export type SplitKind = 'topf' | 'einnahme' | 'umbuchung' | 'einzahlung' | 'ausgleich'
 
 export interface AnalyticsSplit {
   kind: SplitKind
@@ -51,6 +55,8 @@ export interface Classified {
   /** positiv = ausgegeben */
   consumptionCents: number
   erstIchCents: number
+  /** Einzahlungen ins Gemeinsame vom privaten Konto, positiv = abgeflossen */
+  contributionsCents: number
   fixedCostsCents: number
   uncategorizedOutCents: number
   uncategorizedInCents: number
@@ -60,6 +66,7 @@ const ZERO: Classified = {
   incomeCents: 0,
   consumptionCents: 0,
   erstIchCents: 0,
+  contributionsCents: 0,
   fixedCostsCents: 0,
   uncategorizedOutCents: 0,
   uncategorizedInCents: 0,
@@ -81,8 +88,15 @@ export function classify(tx: AnalyticsTransaction, potKinds: Map<string, PotKind
   let consumption = 0
   for (const s of tx.splits) {
     if (s.kind === 'einnahme') result.incomeCents += s.amountCents
-    else if (s.kind === 'topf' && s.potId !== null) {
-      if (potKinds.get(s.potId) === 'erst_ich') result.erstIchCents -= s.amountCents
+    else if (s.kind === 'einzahlung') {
+      // Die Richtung ist je Kontoart fest: privat Ausgang, gemeinsam Eingang (ADR 0006).
+      if (s.amountCents > 0) result.incomeCents += s.amountCents
+      else result.contributionsCents -= s.amountCents
+    } else if (s.kind === 'topf' && s.potId !== null) {
+      const kind = potKinds.get(s.potId)
+      // Topf eines anderen Haushalts: Forderung ans Gemeinsame, kein eigener Konsum.
+      if (kind === undefined) continue
+      if (kind === 'erst_ich') result.erstIchCents -= s.amountCents
       else consumption -= s.amountCents
     }
   }
@@ -96,6 +110,7 @@ const add = (a: Classified, b: Classified): Classified => ({
   incomeCents: a.incomeCents + b.incomeCents,
   consumptionCents: a.consumptionCents + b.consumptionCents,
   erstIchCents: a.erstIchCents + b.erstIchCents,
+  contributionsCents: a.contributionsCents + b.contributionsCents,
   fixedCostsCents: a.fixedCostsCents + b.fixedCostsCents,
   uncategorizedOutCents: a.uncategorizedOutCents + b.uncategorizedOutCents,
   uncategorizedInCents: a.uncategorizedInCents + b.uncategorizedInCents,
@@ -201,7 +216,7 @@ function byMonth(
 }
 
 const withRates = (c: Classified) => {
-  const savedCents = c.incomeCents - c.consumptionCents
+  const savedCents = c.incomeCents - c.consumptionCents - c.contributionsCents
   return {
     ...c,
     savedCents,

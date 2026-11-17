@@ -283,6 +283,19 @@ export class AnalyticsService {
 
   // --- Auswertungen ---------------------------------------------------------------
 
+  /**
+   * Kennzahlen eines Haushalts für einen Monat, **ohne Zugriffsprüfung**: nur für Dienste, die
+   * selbst prüfen, was die anfragende Person sehen darf (Freigaben im Paar-Modell).
+   */
+  async monthMetricsUnchecked(householdId: string, month: Month): Promise<MonthMetrics> {
+    const pots = await this.pots(this.db, householdId)
+    const transactions = await this.transactions(this.db, householdId)
+    const { months } = monthlyMetrics(transactions, pots, month, month, todayUtc())
+    const [metrics] = months
+    if (!metrics) throw new Error('Kennzahlen für den Monat fehlen')
+    return metrics
+  }
+
   async metrics(
     personId: string,
     householdId: string,

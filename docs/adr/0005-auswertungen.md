@@ -27,15 +27,20 @@ bleibt auf dem Server: Jede Auswertung ist je Haushalt und nur für seine Mitgli
 | Einkommen | Summe der Einnahme-Aufteilungen. Nicht zugeordnete Eingänge zählen **nicht** (könnten Umbuchungen oder Erstattungen sein) und werden getrennt ausgewiesen. |
 | Konsum | Ausgaben aus Töpfen außer Erst-ich, abzüglich Erstattungen, **plus nicht zugeordnete Ausgänge**. Lieber eine zu niedrige Sparquote als eine geschönte. |
 | Erst ich | Ausgaben aus Erst-ich-Töpfen (z. B. Überweisung aufs Depot). Das ist Sparen, kein Konsum. |
-| Gespart | Einkommen − Konsum (enthält Erst ich und was auf den Konten bleibt). |
+| Einzahlung | vom privaten Konto ins Gemeinsame (ADR 0006): kein Konsum aus eigenen Töpfen, aber auch **nicht gespart**. Auf dem gemeinsamen Konto zählt sie als Einkommen. |
+| Gespart | Einkommen − Konsum − Einzahlungen (enthält Erst ich und was auf den Konten bleibt). |
 | Umbuchung | zählt nirgends. |
+| Ausgleich | zählt nirgends, ebenso der Anteil einer privaten Buchung in einem gemeinsamen Topf: Das ist eine Forderung ans Gemeinsame, kein eigener Konsum (ADR 0006). |
 
 Anteile kommen als **Basispunkte** (10 000 = 100 %), ohne Einkommen als `null` statt einer
 Division durch null.
 
 ### Kennzahlen
 
-- **Sparquote** = Gespart ÷ Einkommen, je Monat und für den Zeitraum.
+- **Sparquote** = Gespart ÷ Einkommen, je Monat und für den Zeitraum. Ergänzt mit FREI-19:
+  Einzahlungen ins Gemeinsame mindern die private Sparquote. Was das Gemeinsame davon zurücklegt,
+  zeigt die Sparquote des gemeinsamen Haushalts; die private Quote soll nicht schöner aussehen,
+  nur weil das Geld ein Konto weiter liegt. Erst-ich bleibt Sparen.
 - **Fixkostenanteil** = Fixkosten ÷ Einkommen. Fixkosten sind der Konsum-Anteil von Ausgängen, die
   zu einer erkannten Serie gehören (Miete, Versicherungen, Abos). Ein Sparplan ist eine Serie,
   aber keine Fixkost.
@@ -107,7 +112,11 @@ ein Umbenennen würde still die Auswertung ändern.
 - Vor dem Budgetbeginn werden Buchungen nicht zugeordnet. Kennzahlen für diese Monate zeigen
   deshalb kein Einkommen und alle Ausgänge als „nicht zugeordnet“. Aussagekräftig sind die
   Auswertungen ab dem Budgetbeginn; die Apps sollten den Zeitraum dort beginnen lassen.
-- Freigaben (E4) sollen Kennzahlen wie die Sparquote der anderen Person zeigen können. Die
-  Auswertungen sind dafür schon je Haushalt geschnitten; die Freigabe selbst kommt mit FREI-5.
+- Die Sparquote ist seit FREI-19 als Freigabe `sparquote` für die andere Person abrufbar
+  (`GET /v1/persons/{id}/metrics/{JJJJ-MM}`), nur als ganzer Prozentwert (abgerundet), ohne
+  Beträge.
+- Runway, Fixkostenanteil und Sankey rechnen Einzahlungen ins Gemeinsame noch nicht mit: Der
+  Runway nimmt nur den Konsum, im Sankey landet die Einzahlung privat unter „Übrig“ und fehlt im
+  Gemeinsamen als Quelle. Das Sankey über Haushalte hinweg ist FREI-22.
 - Die macOS-App (Menüleiste, Planungsansicht, Charts) baut auf diesen Endpunkten auf und folgt,
   sobald das Xcode-Projekt aus E3 (FREI-4) steht.
