@@ -45,6 +45,10 @@ für iOS und macOS ohne Signatur.
 
 ## Hinweise
 
+- Töpfe richtet die App selbst ein: Reiter „Töpfe“, Knopf oben rechts (Tippen = neuer Topf,
+  gedrückt halten = Reihenfolge und archivierte Töpfe). Bearbeiten und Archivieren über langes
+  Drücken auf einen Topf oder „Topf bearbeiten“ im Zuweisungsblatt. Geleert werden Felder über
+  `clear` im `PATCH`, weil der generierte Client `null` nicht sendet.
 - Barausgaben landen im Bargeldkonto des Haushalts; fehlt es, legt die App beim ersten Erfassen
   eins an. Abhebungen am Automaten als „Umbuchung“ zuordnen.
 - „Buchungen warten“ meldet die App selbst per Hintergrundabruf (etwa stündlich, iOS entscheidet).

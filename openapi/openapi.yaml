@@ -2507,6 +2507,19 @@ paths:
                   maximum: 100000
                 archived:
                   type: boolean
+                clear:
+                  type: array
+                  items:
+                    type: string
+                    enum:
+                      - groupName
+                      - amountCents
+                      - percentBp
+                      - targetMonth
+                  maxItems: 4
+                  description: Felder, die geleert werden (wie `null`). Für Clients, die `null` nicht senden können. Ein Feld darf nicht zugleich einen Wert bekommen.
+                  example:
+                    - amountCents
       responses:
         "200":
           description: Topf geändert
@@ -2540,6 +2553,74 @@ paths:
                 $ref: "#/components/schemas/Error"
         "422":
           description: Plan passt nicht zum Topf-Typ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/households/{householdId}/pot-order:
+    put:
+      tags:
+        - Budget
+      summary: Töpfe sortieren
+      description: Legt die Reihenfolge aller aktiven Töpfe eines Haushalts in einem Schritt fest (sortOrder = Position). Die Liste muss genau die aktiven Töpfe enthalten. Erst-ich-Töpfe werden in dieser Reihenfolge gefüllt; die Automatik läuft danach für den laufenden Monat neu.
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+      requestBody:
+        description: IDs der aktiven Töpfe in der neuen Reihenfolge
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                potIds:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                  maxItems: 1000
+              required:
+                - potIds
+      responses:
+        "200":
+          description: Aktive Töpfe in neuer Reihenfolge
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Pot"
+                required:
+                  - items
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Liste passt nicht zu den aktiven Töpfen des Haushalts
           content:
             application/json:
               schema:
