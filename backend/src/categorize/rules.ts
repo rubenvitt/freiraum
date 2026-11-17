@@ -13,6 +13,8 @@ export interface Target {
   potId: string | null
   /** nur bei `einzahlung` und `ausgleich` auf gemeinsamen Konten: von wem bzw. an wen */
   personId: string | null
+  /** nur bei `umbuchung`: Gegenkonto im selben Haushalt (z. B. Bargeldkonto bei einer Abhebung) */
+  counterAccountId: string | null
 }
 
 /**

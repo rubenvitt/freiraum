@@ -494,7 +494,13 @@ describe('Ausgleich', () => {
     ])
     const [refund] = await transactions(b.token, sharedAccountId)
     expect(refund.splits).toEqual([
-      { kind: 'ausgleich', potId: null, personId: a.id, amountCents: -6_000 },
+      {
+        kind: 'ausgleich',
+        potId: null,
+        personId: a.id,
+        counterAccountId: null,
+        amountCents: -6_000,
+      },
     ])
     const afterRefund = await settlements(a.token, sharedId)
     expect(afterRefund.balances[0]).toMatchObject({ repaidCents: 6_000, openCents: 4_000 })
@@ -512,7 +518,13 @@ describe('Ausgleich', () => {
     ])
     const credit = (await transactions(a.token, a.accountId)).find((t) => t.amountCents === 6_000)
     expect(credit?.splits).toEqual([
-      { kind: 'ausgleich', potId: null, personId: null, amountCents: 6_000 },
+      {
+        kind: 'ausgleich',
+        potId: null,
+        personId: null,
+        counterAccountId: null,
+        amountCents: 6_000,
+      },
     ])
     expect((await budget(a.token, a.householdId)).inflowsCents).toBe(300_000)
 
