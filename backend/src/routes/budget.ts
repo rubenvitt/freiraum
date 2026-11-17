@@ -20,6 +20,8 @@ const PercentBp = z
   .max(10_000)
   .openapi({ description: 'Anteil in Basispunkten, 1000 = 10 %', example: 1000 })
 
+const ClearableField = z.enum(['groupName', 'amountCents', 'percentBp', 'targetMonth'])
+
 const PotSchema = z
   .object({
     id: z.uuid(),
@@ -208,15 +210,37 @@ const updatePot = createRoute({
   request: {
     params: z.object({ potId: pathId('potId') }),
     body: json(
-      z.object({
-        name: z.string().trim().min(1).max(100).optional(),
-        groupName: z.string().trim().max(100).nullable().optional(),
-        amountCents: PositiveCents.nullable().optional(),
-        percentBp: PercentBp.nullable().optional(),
-        targetMonth: Month.nullable().optional(),
-        sortOrder: z.number().int().min(0).max(100_000).optional(),
-        archived: z.boolean().optional(),
-      }),
+      z
+        .object({
+          name: z.string().trim().min(1).max(100).optional(),
+          groupName: z.string().trim().max(100).nullable().optional(),
+          amountCents: PositiveCents.nullable().optional(),
+          percentBp: PercentBp.nullable().optional(),
+          targetMonth: Month.nullable().optional(),
+          sortOrder: z.number().int().min(0).max(100_000).optional(),
+          archived: z.boolean().optional(),
+          clear: z
+            .array(ClearableField)
+            .max(4)
+            .optional()
+            .openapi({
+              description:
+                'Felder, die geleert werden (wie `null`). Für Clients, die `null` nicht senden ' +
+                'können. Ein Feld darf nicht zugleich einen Wert bekommen.',
+              example: ['amountCents'],
+            }),
+        })
+        .superRefine((body, ctx) => {
+          for (const field of body.clear ?? []) {
+            if (body[field] !== undefined && body[field] !== null) {
+              ctx.addIssue({
+                code: 'custom',
+                path: ['clear'],
+                message: `${field} soll geleert werden und hat zugleich einen Wert`,
+              })
+            }
+          }
+        }),
       'Änderungen',
     ),
   },
@@ -227,6 +251,33 @@ const updatePot = createRoute({
     404: error('Topf nicht gefunden (oder kein Zugriff)'),
     409: error('Name vergeben oder Topf nicht leer'),
     422: error('Plan passt nicht zum Topf-Typ'),
+  },
+})
+
+const reorderPots = createRoute({
+  method: 'put',
+  path: '/v1/households/{householdId}/pot-order',
+  tags: ['Budget'],
+  summary: 'Töpfe sortieren',
+  description:
+    'Legt die Reihenfolge aller aktiven Töpfe eines Haushalts in einem Schritt fest (sortOrder ' +
+    '= Position). Die Liste muss genau die aktiven Töpfe enthalten. Erst-ich-Töpfe werden in ' +
+    'dieser Reihenfolge gefüllt; die Automatik läuft danach für den laufenden Monat neu.',
+  security: [{ bearerAuth: [] }],
+  middleware: [requireAuth] as const,
+  request: {
+    params: householdParams,
+    body: json(
+      z.object({ potIds: z.array(z.uuid()).max(1_000) }),
+      'IDs der aktiven Töpfe in der neuen Reihenfolge',
+    ),
+  },
+  responses: {
+    200: json(z.object({ items: z.array(PotSchema) }), 'Aktive Töpfe in neuer Reihenfolge'),
+    400: error('Ungültige Anfrage'),
+    401: error('Nicht angemeldet'),
+    404: error('Haushalt nicht gefunden (oder kein Zugriff)'),
+    422: error('Liste passt nicht zu den aktiven Töpfen des Haushalts'),
   },
 })
 
@@ -415,8 +466,20 @@ export function budgetRoutes(app: OpenAPIHono<AppEnv>): void {
 
   app.openapi(updatePot, async (c) => {
     const { potId } = c.req.valid('param')
-    const pot = await c.var.budget.updatePot(c.var.session.person.id, potId, c.req.valid('json'))
+    const { clear, ...patch } = c.req.valid('json')
+    for (const field of clear ?? []) patch[field] = null
+    const pot = await c.var.budget.updatePot(c.var.session.person.id, potId, patch)
     return c.json(potJson(pot), 200)
+  })
+
+  app.openapi(reorderPots, async (c) => {
+    const { householdId } = c.req.valid('param')
+    const items = await c.var.budget.reorderPots(
+      c.var.session.person.id,
+      householdId,
+      c.req.valid('json').potIds,
+    )
+    return c.json({ items: items.map(potJson) }, 200)
   })
 
   app.openapi(getStart, async (c) => {

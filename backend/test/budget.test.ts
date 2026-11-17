@@ -206,6 +206,153 @@ describe('Töpfe', () => {
   })
 })
 
+describe('Töpfe ändern und sortieren', () => {
+  const patch = (token: string, pot: string, input: Json) =>
+    request('PATCH', `/v1/pots/${pot}`, input, token)
+  const reorder = (token: string, householdId: string, potIds: string[]) =>
+    request('PUT', `/v1/households/${householdId}/pot-order`, { potIds }, token)
+
+  it('leert Felder über clear, auch ohne null zu senden', async () => {
+    const a = await setup()
+    const pot = await potId(a.token, a.householdId, {
+      name: 'Investieren',
+      kind: 'erst_ich',
+      amountCents: 20_000,
+      groupName: 'Sparen',
+    })
+    // Von festem Betrag auf Anteil wechseln: in einer Anfrage, sonst greift die Planprüfung.
+    const res = await patch(a.token, pot, { percentBp: 1_000, clear: ['amountCents', 'groupName'] })
+    expect(res.status).toBe(200)
+    expect(await body(res)).toMatchObject({ amountCents: null, percentBp: 1_000, groupName: null })
+
+    const ziel = await potId(a.token, a.householdId, {
+      name: 'Fahrrad',
+      kind: 'ziel',
+      amountCents: 100_000,
+      targetMonth: addMonthsTo(current, 3),
+    })
+    const cleared = await patch(a.token, ziel, { clear: ['targetMonth'] })
+    expect(cleared.status).toBe(200)
+    expect((await body(cleared)).targetMonth).toBeNull()
+
+    // null bleibt gültig.
+    const viaNull = await patch(a.token, pot, { groupName: 'Sparen' })
+    expect((await body(viaNull)).groupName).toBe('Sparen')
+    expect((await body(await patch(a.token, pot, { groupName: null }))).groupName).toBeNull()
+  })
+
+  it('lehnt clear zusammen mit einem Wert und ungültige Pläne ab', async () => {
+    const a = await setup()
+    const pot = await potId(a.token, a.householdId, {
+      name: 'Investieren',
+      kind: 'erst_ich',
+      amountCents: 20_000,
+    })
+    const both = await patch(a.token, pot, { amountCents: 1, clear: ['amountCents'] })
+    expect(both.status).toBe(400)
+    expect((await body(both)).error.code).toBe('ungueltige_anfrage')
+    const unknown = await patch(a.token, pot, { clear: ['name'] })
+    expect(unknown.status).toBe(400)
+    // Erst-ich ohne Betrag und ohne Anteil
+    const empty = await patch(a.token, pot, { clear: ['amountCents'] })
+    expect(empty.status).toBe(422)
+    expect((await body(empty)).error.code).toBe('topf_plan_ungueltig')
+  })
+
+  it('sortiert alle aktiven Töpfe eines Haushalts in einem Schritt', async () => {
+    const a = await setup()
+    const miete = await potId(a.token, a.householdId, { name: 'Miete', kind: 'monatlich' })
+    const essen = await potId(a.token, a.householdId, { name: 'Essen', kind: 'monatlich' })
+    const kino = await potId(a.token, a.householdId, { name: 'Kino', kind: 'monatlich' })
+    const alt = await potId(a.token, a.householdId, { name: 'Alt', kind: 'monatlich' })
+    expect((await patch(a.token, alt, { archived: true })).status).toBe(200)
+
+    const res = await reorder(a.token, a.householdId, [kino, miete, essen])
+    expect(res.status).toBe(200)
+    const { items } = await body(res)
+    expect(items.map((p: Json) => p.name)).toEqual(['Kino', 'Miete', 'Essen'])
+    expect(items.map((p: Json) => p.sortOrder)).toEqual([0, 1, 2])
+    const listed = await body(
+      await request('GET', `/v1/households/${a.householdId}/pots`, undefined, a.token),
+    )
+    expect(listed.items.map((p: Json) => p.id)).toEqual([kino, miete, essen])
+    const view = await body(await month(a.token, a.householdId, current))
+    expect(view.pots.filter((p: Json) => !p.archived).map((p: Json) => p.potId)).toEqual([
+      kino,
+      miete,
+      essen,
+    ])
+  })
+
+  it('verlangt beim Sortieren genau die aktiven Töpfe des Haushalts', async () => {
+    const a = await setup('Person A')
+    const b = await setup('Person B')
+    const miete = await potId(a.token, a.householdId, { name: 'Miete', kind: 'monatlich' })
+    const essen = await potId(a.token, a.householdId, { name: 'Essen', kind: 'monatlich' })
+    const fremd = await potId(b.token, b.householdId, { name: 'Fremd', kind: 'monatlich' })
+    const alt = await potId(a.token, a.householdId, { name: 'Alt', kind: 'monatlich' })
+    await patch(a.token, alt, { archived: true })
+
+    for (const ids of [
+      [miete],
+      [miete, essen, fremd],
+      [miete, essen, alt],
+      [miete, miete, essen],
+    ]) {
+      const res = await reorder(a.token, a.householdId, ids)
+      expect(res.status).toBe(422)
+      expect((await body(res)).error.code).toBe('topf_reihenfolge_ungueltig')
+    }
+    expect((await reorder(b.token, a.householdId, [miete, essen])).status).toBe(404)
+  })
+
+  it('füllt Erst-ich-Töpfe nach dem Sortieren in der neuen Reihenfolge', async () => {
+    const a = await setup()
+    await salaryRule(a.token, a.householdId)
+    const invest = await potId(a.token, a.householdId, {
+      name: 'Investieren',
+      kind: 'erst_ich',
+      amountCents: 60_000,
+    })
+    const reserve = await potId(a.token, a.householdId, {
+      name: 'Notgroschen',
+      kind: 'erst_ich',
+      amountCents: 60_000,
+    })
+    expect((await reorder(a.token, a.householdId, [reserve, invest])).status).toBe(200)
+    await importInto(a.token, a.accountId, [salary(current, 100_000)])
+    const view = await body(await month(a.token, a.householdId, current))
+    const byId = Object.fromEntries(view.pots.map((p: Json) => [p.potId, p]))
+    expect(byId[reserve].assignedCents).toBe(60_000)
+    expect(byId[invest].assignedCents).toBe(40_000)
+  })
+
+  it('richtet einen neuen Haushalt nur mit den Endpunkten der App ein', async () => {
+    // Ablauf der App: Töpfe anlegen, Erst-ich mit 10 %, Gehalt kommt, Topf füllt sich.
+    const a = await setup()
+    await salaryRule(a.token, a.householdId)
+    const invest = await potId(a.token, a.householdId, {
+      name: 'Investieren',
+      kind: 'erst_ich',
+      percentBp: 1_000,
+      groupName: 'Erst ich',
+    })
+    const miete = await potId(a.token, a.householdId, {
+      name: 'Miete',
+      kind: 'monatlich',
+      amountCents: 90_000,
+      groupName: 'Fix',
+    })
+    expect((await reorder(a.token, a.householdId, [invest, miete])).status).toBe(200)
+    await importInto(a.token, a.accountId, [salary(current, 250_000)])
+    const view = await body(await month(a.token, a.householdId, current))
+    expect(view.pots.find((p: Json) => p.potId === invest)).toMatchObject({
+      assignedCents: 25_000,
+      assignmentSource: 'automatik',
+    })
+  })
+})
+
 describe('Zuweisungen und „Noch ohne Aufgabe“', () => {
   it('verteilt nur Geld, das da ist', async () => {
     const a = await setup()

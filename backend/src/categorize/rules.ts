@@ -16,13 +16,23 @@ export interface Target {
 }
 
 /**
- * Einzahlung und Ausgleich haben je Haushaltsart eine feste Richtung (ADR 0006): Einzahlungen
- * gehen vom privaten aufs gemeinsame Konto, Erstattungen zurück. Sonst `null` (beide Richtungen).
+ * Die Einzahlung hat je Haushaltsart eine feste Richtung (ADR 0006): vom privaten aufs
+ * gemeinsame Konto. Der Ausgleich geht in beide Richtungen (Erstattung ans Private oder
+ * Rückzahlung ans Gemeinsame, FREI-18). Sonst `null` (beide Richtungen).
  */
 export function requiredDirection(kind: SplitKind, household: HouseholdKind): Direction | null {
   if (kind === 'einzahlung') return household === 'privat' ? 'ausgang' : 'eingang'
-  if (kind === 'ausgleich') return household === 'privat' ? 'eingang' : 'ausgang'
   return null
+}
+
+/**
+ * Übliche Richtung von Einzahlung und Ausgleich: Regeln ohne eigene Richtung bekommen sie als
+ * Merkmal. Beim Ausgleich ist das die Erstattung vom gemeinsamen aufs private Konto; die
+ * Rückzahlung einer Schuld ist ein Einzelfall und wird nicht zur Regel.
+ */
+export function usualDirection(kind: SplitKind, household: HouseholdKind): Direction | null {
+  if (kind === 'ausgleich') return household === 'privat' ? 'eingang' : 'ausgang'
+  return requiredDirection(kind, household)
 }
 
 export const directionOf = (amountCents: number): Direction =>

@@ -7,6 +7,12 @@ struct MappingError: Error, CustomStringConvertible {
     let description: String
 }
 
+/// Wert eines generierten Enums aus dem Rohwert; der Typ ergibt sich aus dem Aufruf.
+func apiEnum<T: RawRepresentable>(_ raw: String) throws -> T where T.RawValue == String {
+    guard let value = T(rawValue: raw) else { throw MappingError(description: "Wert \(raw)") }
+    return value
+}
+
 extension Household {
     init(_ h: Components.Schemas.Household) throws {
         guard let kind = Kind(rawValue: h.kind.rawValue) else { throw MappingError(description: "Haushaltsart \(h.kind.rawValue)") }

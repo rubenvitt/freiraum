@@ -349,6 +349,54 @@ export class BudgetService {
     })
   }
 
+  /**
+   * Reihenfolge aller aktiven Töpfe festlegen (sortOrder = Position). `potIds` muss genau die
+   * aktiven Töpfe des Haushalts enthalten, jeden einmal. Archivierte behalten ihren Platz.
+   */
+  async reorderPots(
+    personId: string,
+    householdId: string,
+    potIds: string[],
+    asOf: IsoDate = todayUtc(),
+  ): Promise<Pot[]> {
+    return this.db.begin(async (tx) => {
+      await this.householdAccess(tx, personId, householdId, true)
+      const active = await tx<{ id: string; kind: PotKind }[]>`
+        select id, kind from pots where household_id = ${householdId} and archived_at is null
+      `
+      const activeIds = new Set(active.map((p) => p.id))
+      const unique = new Set(potIds)
+      if (
+        unique.size !== potIds.length ||
+        unique.size !== activeIds.size ||
+        potIds.some((id) => !activeIds.has(id))
+      ) {
+        throw new ApiError(
+          422,
+          'topf_reihenfolge_ungueltig',
+          'Die Liste muss jeden aktiven Topf des Haushalts genau einmal enthalten. Bitte neu laden.',
+        )
+      }
+      if (potIds.length > 0) {
+        // ordinality zählt ab 1, die Position beginnt bei 0.
+        await tx`
+          update pots set sort_order = o.position - 1
+          from unnest(${potIds}::uuid[]) with ordinality as o(id, position)
+          where pots.id = o.id
+        `
+      }
+      if (active.some((p) => p.kind === 'erst_ich')) {
+        await this.runErstIch(tx, householdId, monthOf(asOf), asOf)
+      }
+      const rows = await tx<PotRow[]>`
+        select ${tx.unsafe(POT_COLUMNS)} from pots
+        where household_id = ${householdId} and archived_at is null
+        order by sort_order, created_at
+      `
+      return rows.map(toPot)
+    })
+  }
+
   // --- Budgetdaten -------------------------------------------------------------
 
   /** Alles, was die Budgetrechnung eines Haushalts braucht (Mengen sind klein: zwei Personen). */

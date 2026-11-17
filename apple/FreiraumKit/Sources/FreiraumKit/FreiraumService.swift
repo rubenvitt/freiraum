@@ -176,6 +176,64 @@ public final class FreiraumService: Sendable {
         }
     }
 
+    /// Archivierte Töpfe eines Haushalts (zum Wiederherstellen).
+    public func archivedPots(householdId: String) async throws(APIError) -> [Pot] {
+        try await call {
+            let out = try await client.getV1HouseholdsHouseholdIdPots(
+                path: .init(householdId: householdId),
+                query: .init(includeArchived: apiEnum("true"))
+            )
+            guard case let .ok(ok) = out else { throw unexpected(out) }
+            return try ok.body.json.items.map(Pot.init).filter(\.archived)
+        }
+    }
+
+    /// Topf anlegen. Ein Erst-ich-Topf füllt sich sofort aus „Noch ohne Aufgabe“.
+    public func createPot(householdId: String, input: PotInput) async throws(APIError) -> Pot {
+        try await call {
+            let out = try await client.postV1HouseholdsHouseholdIdPots(
+                path: .init(householdId: householdId),
+                body: .json(.init(
+                    name: input.name, kind: apiEnum(input.kind.rawValue), groupName: input.groupName,
+                    amountCents: input.amountCents, percentBp: input.percentBp,
+                    targetMonth: input.targetMonth?.description
+                ))
+            )
+            guard case let .created(created) = out else { throw unexpected(out) }
+            return try Pot(try created.body.json)
+        }
+    }
+
+    /// Topf ändern, archivieren oder wiederherstellen. Geleert wird über `changes.clear`.
+    public func updatePot(id: String, changes: PotChanges) async throws(APIError) -> Pot {
+        try await call {
+            let out = try await client.patchV1PotsPotId(
+                path: .init(potId: id),
+                body: .json(.init(
+                    name: changes.name, groupName: changes.groupName, amountCents: changes.amountCents,
+                    percentBp: changes.percentBp, targetMonth: changes.targetMonth?.description,
+                    archived: changes.archived,
+                    clear: changes.clear.map { try apiEnum($0.rawValue) }
+                ))
+            )
+            guard case let .ok(ok) = out else { throw unexpected(out) }
+            return try Pot(try ok.body.json)
+        }
+    }
+
+    /// Reihenfolge aller aktiven Töpfe festlegen. `potIds` muss jeden aktiven Topf genau einmal
+    /// enthalten, sonst lehnt der Server ab (422).
+    public func reorderPots(householdId: String, potIds: [String]) async throws(APIError) -> [Pot] {
+        try await call {
+            let out = try await client.putV1HouseholdsHouseholdIdPotOrder(
+                path: .init(householdId: householdId),
+                body: .json(.init(potIds: potIds))
+            )
+            guard case let .ok(ok) = out else { throw unexpected(out) }
+            return try ok.body.json.items.map(Pot.init)
+        }
+    }
+
     public func budget(householdId: String, month: YearMonth) async throws(APIError) -> BudgetMonth {
         try await call {
             let out = try await client.getV1HouseholdsHouseholdIdBudgetMonth(
