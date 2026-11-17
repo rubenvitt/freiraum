@@ -15,7 +15,10 @@ const Bp = z
 const PotKind = z.enum(['monatlich', 'ruecklage', 'ziel', 'erst_ich'])
 
 const metricFields = {
-  incomeCents: z.number().int().openapi({ description: 'Einkommen: Einnahme-Aufteilungen' }),
+  incomeCents: z.number().int().openapi({
+    description:
+      'Einkommen: Einnahme-Aufteilungen; im gemeinsamen Haushalt auch die Einzahlungen der Personen',
+  }),
   consumptionCents: z
     .number()
     .int()
@@ -28,7 +31,15 @@ const metricFields = {
     .number()
     .int()
     .openapi({ description: 'Ausgaben aus Erst-ich-Töpfen (Sparen, kein Konsum)' }),
-  savedCents: z.number().int().openapi({ description: 'Einkommen − Konsum' }),
+  contributionsCents: z
+    .number()
+    .int()
+    .openapi({
+      description:
+        'Einzahlungen ins Gemeinsame vom privaten Konto (positiv = abgeflossen): kein Konsum, ' +
+        'aber auch nicht gespart',
+    }),
+  savedCents: z.number().int().openapi({ description: 'Einkommen − Konsum − Einzahlungen' }),
   savingsRateBp: Bp.openapi({ description: 'Sparquote: Gespart ÷ Einkommen, in Basispunkten' }),
   fixedCostsCents: z.number().int().openapi({
     description: 'Konsum aus wiederkehrenden Ausgängen (Miete, Versicherungen, Abos)',
@@ -71,12 +82,19 @@ const MetricsSchema = z
             'Geld des Haushalts heute: Noch ohne Aufgabe + alle Töpfe + nicht zugeordnete Buchungen',
         }),
         averageMonthlyConsumptionCents: z.number().int().nullable(),
+        fixedContributionsCents: z.number().int().openapi({
+          description:
+            'Feste Einzahlungen ins Gemeinsame, die jetzt gelten (nur privat; Prozent vom Netto zählt nicht)',
+        }),
+        monthlyOutflowCents: z.number().int().nullable().openapi({
+          description: 'Konsum im Schnitt + feste Einzahlungen; null ohne Historie',
+        }),
         basedOnMonths: z
           .number()
           .int()
           .openapi({ description: 'abgeschlossene Monate im Schnitt (höchstens 6)' }),
         months: z.number().nullable().openapi({
-          description: 'Monate ohne Einkommen bei diesem Konsum, eine Nachkommastelle',
+          description: 'Monate ohne Einkommen bei diesem Abfluss, eine Nachkommastelle',
           example: 7.4,
         }),
       })

@@ -87,6 +87,57 @@ describe('Einordnung einer Buchung', () => {
     })
   })
 
+  it('zählt Einzahlungen ins Gemeinsame als Abfluss, auf dem gemeinsamen Konto als Einkommen', () => {
+    // privates Konto: Geld verlässt den Haushalt, ist aber kein Konsum aus eigenen Töpfen
+    expect(
+      classify(
+        tx('2026-01-02', -100_000, [{ kind: 'einzahlung', potId: null, amountCents: -100_000 }]),
+        kinds,
+      ),
+    ).toMatchObject({ incomeCents: 0, consumptionCents: 0, contributionsCents: 100_000 })
+    // gemeinsames Konto: dieselbe Einzahlung ist Einkommen des gemeinsamen Haushalts
+    expect(
+      classify(
+        tx('2026-01-02', 100_000, [{ kind: 'einzahlung', potId: null, amountCents: 100_000 }]),
+        kinds,
+      ),
+    ).toMatchObject({ incomeCents: 100_000, consumptionCents: 0, contributionsCents: 0 })
+  })
+
+  it('lässt Ausgleich und privat bezahlte gemeinsame Ausgaben neutral (Forderung, kein Konsum)', () => {
+    const neutral = {
+      incomeCents: 0,
+      consumptionCents: 0,
+      erstIchCents: 0,
+      contributionsCents: 0,
+      uncategorizedOutCents: 0,
+      uncategorizedInCents: 0,
+    }
+    // Topf eines anderen (des gemeinsamen) Haushalts
+    expect(classify(tx('2026-01-05', -6_000, 'gemeinsam-lebensmittel'), kinds)).toMatchObject(
+      neutral,
+    )
+    // Erstattung vom gemeinsamen Konto (privat: Eingang, gemeinsam: Ausgang)
+    for (const amount of [6_000, -6_000]) {
+      expect(
+        classify(
+          tx('2026-01-20', amount, [{ kind: 'ausgleich', potId: null, amountCents: amount }]),
+          kinds,
+        ),
+      ).toMatchObject(neutral)
+    }
+    // Gemischt: nur der eigene Anteil ist Konsum
+    expect(
+      classify(
+        tx('2026-01-06', -10_000, [
+          { kind: 'topf', potId: 'gemeinsam-lebensmittel', amountCents: -4_000 },
+          { kind: 'topf', potId: 'essen', amountCents: -6_000 },
+        ]),
+        kinds,
+      ).consumptionCents,
+    ).toBe(6_000)
+  })
+
   it('zählt nur den Konsum wiederkehrender Ausgänge als Fixkosten (kein Sparplan)', () => {
     expect(
       classify(tx('2026-01-03', -90_000, 'miete', { recurringSeriesId: 's1' }), kinds)
@@ -129,6 +180,23 @@ describe('Kennzahlen je Monat', () => {
       incomeCents: 600_000,
       savedCents: 320_000,
       savingsRateBp: 5_333,
+    })
+  })
+
+  it('rechnet Einzahlungen ins Gemeinsame nicht als gespart', () => {
+    const withContribution = [
+      ...data,
+      tx('2026-01-02', -60_000, [{ kind: 'einzahlung', potId: null, amountCents: -60_000 }]),
+    ]
+    const { months } = monthlyMetrics(withContribution, pots, '2026-01', '2026-01', '2026-01-31')
+    expect(months[0]).toMatchObject({
+      incomeCents: 300_000,
+      consumptionCents: 130_000,
+      contributionsCents: 60_000,
+      // 300 000 − 130 000 Konsum − 60 000 Einzahlung
+      savedCents: 110_000,
+      savingsRateBp: 3_667,
+      fixedCostShareBp: 3_000,
     })
   })
 
@@ -189,8 +257,26 @@ describe('Runway', () => {
     expect(runway(data, pots, 600_000, '2026-03-15')).toEqual({
       cashCents: 600_000,
       averageMonthlyConsumptionCents: 150_000,
+      fixedContributionsCents: 0,
+      monthlyOutflowCents: 150_000,
       basedOnMonths: 2,
       months: 4,
+    })
+  })
+
+  it('rechnet feste Einzahlungen ins Gemeinsame als laufenden Abfluss mit', () => {
+    const data = [tx('2026-02-10', -100_000, 'essen')]
+    expect(runway(data, pots, 600_000, '2026-03-15', 50_000)).toMatchObject({
+      averageMonthlyConsumptionCents: 100_000,
+      fixedContributionsCents: 50_000,
+      monthlyOutflowCents: 150_000,
+      months: 4,
+    })
+    // Nur Einzahlungen, kein Konsum: Der Runway endet trotzdem.
+    expect(runway([salary('2026-02-01')], pots, 100_000, '2026-03-15', 50_000)).toMatchObject({
+      averageMonthlyConsumptionCents: 0,
+      monthlyOutflowCents: 50_000,
+      months: 2,
     })
   })
 

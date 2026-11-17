@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { addMonthsTo, monthOf } from '../src/budget/months.js'
 import type {
   LlmCategorizer,
   LlmOption,
@@ -14,6 +15,7 @@ import {
   LLM_MAX_FAILURES_IN_ROW,
   maskIbans,
 } from '../src/categorize/service.js'
+import { todayUtc } from '../src/ledger/dates.js'
 import { setupTestApp } from './helpers/app.js'
 
 // Alle Namen, Beträge und IBANs sind erfunden.
@@ -756,6 +758,81 @@ describe('LLM-Vorschläge', () => {
     expect(llmCalls).toHaveLength(0)
     const [t] = await pending(a.token)
     expect(t?.suggestion.source).toBe('regel')
+  })
+})
+
+describe('Buchungen über 0 Cent', () => {
+  // Manche Banken liefern Nullbuchungen, etwa einen Kontoabschluss ohne Entgelt (FREI-20).
+  it('importiert sie trotz passender Regel und bestätigt sie ohne Aufteilung', async () => {
+    const a = await setup()
+    const previous = addMonthsTo(monthOf(todayUtc()), -1)
+    expect(
+      (
+        await request(
+          'PUT',
+          `/v1/households/${a.householdId}/budget-start`,
+          { month: previous },
+          a.token,
+        )
+      ).status,
+    ).toBe(200)
+    const gebuehren = await pot(a.token, a.householdId, 'Kontoführung')
+    const rule = await request(
+      'POST',
+      `/v1/households/${a.householdId}/rules`,
+      { counterpartyName: 'Bank Beispiel', kind: 'topf', potId: gebuehren },
+      a.token,
+    )
+    expect(rule.status).toBe(201)
+    llmAnswer = () => ({
+      kind: 'topf',
+      potId: gebuehren,
+      confidencePct: 90,
+      reason: 'Bankentgelt.',
+    })
+
+    const res = await importInto(a.token, a.accountId, [
+      {
+        bookingDate: `${previous}-28`,
+        amountCents: 0,
+        counterpartyName: 'Bank Beispiel',
+        purpose: 'Abschluss ohne Entgelt',
+      },
+      { bookingDate: `${previous}-28`, amountCents: 0, purpose: 'Rechnungsabschluss' },
+    ])
+    expect(res.status).toBe(201)
+    expect((await body(res)).imported).toBe(2)
+    await categorize.llmIdle()
+
+    // Ohne Betrag gibt es nichts zuzuordnen: kein Vorschlag, keine Frage ans Modell.
+    expect(llmCalls).toHaveLength(0)
+    expect(await pending(a.token)).toHaveLength(0)
+    const [{ n }] = (await db`
+      select count(*)::int as n from transaction_splits s
+      join transactions t on t.id = s.transaction_id where t.account_id = ${a.accountId}
+    `) as unknown as [{ n: number }]
+    expect(n).toBe(0)
+
+    // Von Hand lässt sich keine Aufteilung über 0 Cent anlegen.
+    const [zero] = await db<{ id: string }[]>`
+      select id from transactions where account_id = ${a.accountId} limit 1
+    `
+    const split = await request(
+      'PUT',
+      `/v1/transactions/${zero?.id}/splits`,
+      { splits: [{ kind: 'einnahme', amountCents: 0 }] },
+      a.token,
+    )
+    expect(split.status).toBe(422)
+    expect((await body(split)).error.code).toBe('aufteilung_null')
+
+    const closing = await request(
+      'POST',
+      `/v1/households/${a.householdId}/budget/${previous}/closing`,
+      undefined,
+      a.token,
+    )
+    expect(closing.status).toBe(201)
   })
 })
 

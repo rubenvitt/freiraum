@@ -83,8 +83,8 @@ Anmeldung in der App, Barausgaben im Backend, Weg der Benachrichtigung und was d
   die 50 € Bargeld“; die Übersicht zeigt „30 € Bargeld noch nicht erfasst“ und öffnet von dort
   die Barausgabe.
 - Vertrag: `SplitInput` ist ein eigenständiges Objekt statt einer Erweiterung von `Split`. Die
-  Erweiterung wurde im Vertrag ein `allOf`, das der Swift-Client als Verschachtelung erzeugt und
-  das den Build seit E4 brach.
+  Erweiterung wurde im Vertrag ein `allOf`, das der Swift-Client als Verschachtelung
+  (`value1`/`value2`) erzeugt; jedes neue Feld hätte dort zweimal gesetzt werden müssen.
 
 ### Benachrichtigung „Buchungen warten“: lokal per Hintergrundabruf
 

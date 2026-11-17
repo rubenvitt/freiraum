@@ -130,6 +130,8 @@ describe('Kennzahlen', () => {
     expect(m.runway).toEqual({
       cashCents: 775_000,
       averageMonthlyConsumptionCents: 57_500,
+      fixedContributionsCents: 0,
+      monthlyOutflowCents: 57_500,
       basedOnMonths: 2,
       months: 13.5,
     })

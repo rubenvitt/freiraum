@@ -413,6 +413,66 @@ describe('Einzahlungsregeln', () => {
       ).status,
     ).toBe(404)
   })
+
+  it('kürzt den privaten Runway nur um feste Einzahlungen', async () => {
+    const { a, b, sharedId } = await couple()
+    await salary(a, 300_000)
+    // Konsum im Vormonat (nicht zugeordnet zählt als ausgegeben): 50 000 je Monat.
+    await importInto(a.token, a.accountId, [
+      {
+        bookingDate: `${addMonthsTo(current, -1)}-10`,
+        amountCents: -50_000,
+        counterpartyName: 'Supermarkt Beispiel',
+        purpose: 'Einkauf',
+      },
+    ])
+    const put = (token: string, m: string, rule: Json) =>
+      request('PUT', `/v1/households/${sharedId}/contribution-rules/${m}`, rule, token)
+    const runway = async () =>
+      (
+        await body(
+          await request(
+            'GET',
+            `/v1/households/${a.householdId}/analytics/metrics`,
+            undefined,
+            a.token,
+          ),
+        )
+      ).runway as Json
+
+    // Geld 300 000 − 50 000 = 250 000 bei 50 000 Konsum im Monat
+    expect(await runway()).toEqual({
+      cashCents: 250_000,
+      averageMonthlyConsumptionCents: 50_000,
+      fixedContributionsCents: 0,
+      monthlyOutflowCents: 50_000,
+      basedOnMonths: 1,
+      months: 5,
+    })
+
+    // Prozent vom Netto fällt ohne Einkommen weg: kein Einfluss.
+    expect((await put(a.token, current, { kind: 'prozent', percentBp: 4_000 })).status).toBe(200)
+    expect(await runway()).toMatchObject({ fixedContributionsCents: 0, months: 5 })
+
+    // Feste 500 € laufen weiter: der Runway wird kürzer.
+    expect((await put(a.token, current, { kind: 'fest', amountCents: 50_000 })).status).toBe(200)
+    expect(await runway()).toMatchObject({
+      fixedContributionsCents: 50_000,
+      monthlyOutflowCents: 100_000,
+      months: 2.5,
+    })
+
+    // Es zählt die Regel, die jetzt gilt; die Regel der anderen Person zählt nicht.
+    expect((await put(a.token, next, { kind: 'fest', amountCents: 110_000 })).status).toBe(200)
+    expect((await put(b.token, current, { kind: 'fest', amountCents: 80_000 })).status).toBe(200)
+    expect(await runway()).toMatchObject({ fixedContributionsCents: 50_000, months: 2.5 })
+
+    // Im gemeinsamen Haushalt ist die Einzahlung kein Abfluss.
+    const shared = await body(
+      await request('GET', `/v1/households/${sharedId}/analytics/metrics`, undefined, a.token),
+    )
+    expect(shared.runway.fixedContributionsCents).toBe(0)
+  })
 })
 
 describe('Ausgleich', () => {
@@ -564,10 +624,12 @@ describe('Ausgleich', () => {
   })
 
   it('erlaubt gemeinsame Töpfe nur von privaten Konten der Mitglieder', async () => {
-    const { a, sharedId, sharedAccountId } = await couple()
+    const { a, b, sharedId, sharedAccountId } = await couple()
     const outsider = await person('Person C', null)
     const groceries = await pot(a.token, sharedId, { name: 'Lebensmittel', kind: 'monatlich' })
-    const privatePot = await pot(a.token, a.householdId, { name: 'Freizeit', kind: 'monatlich' })
+    // Seit FREI-18 darf das gemeinsame Konto den eigenen privaten Topf belasten, aber nie den
+    // der anderen Person.
+    const privatePot = await pot(b.token, b.householdId, { name: 'Freizeit', kind: 'monatlich' })
     const spend = { bookingDate: day(5), amountCents: -1_000, counterpartyName: 'Laden' }
     await importInto(outsider.token, outsider.accountId, [spend])
     await importInto(a.token, sharedAccountId, [spend])
@@ -612,6 +674,455 @@ describe('Ausgleich', () => {
   })
 })
 
+describe('Umgekehrter Ausgleich', () => {
+  it('belastet den eigenen privaten Topf und führt die Ausgabe als Schuld ans Gemeinsame', async () => {
+    const { a, b, sharedId, sharedAccountId } = await couple()
+    await salary(a, 300_000)
+    const groceries = await pot(a.token, sharedId, { name: 'Lebensmittel', kind: 'monatlich' })
+    const books = await pot(a.token, a.householdId, { name: 'Bücher', kind: 'monatlich' })
+    const ownBefore = await budget(a.token, a.householdId)
+    const sharedBefore = await budget(a.token, sharedId)
+
+    await importInto(a.token, sharedAccountId, [
+      {
+        bookingDate: day(5),
+        amountCents: -2_500,
+        counterpartyName: 'Buchhandlung Beispiel',
+        purpose: 'Kartenzahlung 4711',
+      },
+      { bookingDate: day(6), amountCents: -4_000, counterpartyName: 'Supermarkt Beispiel' },
+    ])
+    const [groceryRun, bookshop] = await transactions(a.token, sharedAccountId)
+    expect(bookshop.counterpartyName).toBe('Buchhandlung Beispiel')
+
+    // Die andere Person darf den privaten Topf nicht wählen, auch nicht für die eigene Buchung.
+    const foreign = await setSplits(b.token, bookshop.id, [
+      { kind: 'topf', potId: books, amountCents: -2_500 },
+    ])
+    expect(foreign.status).toBe(422)
+    expect((await body(foreign)).error.code).toBe('topf_anderer_haushalt')
+
+    const own = await setSplits(a.token, bookshop.id, [
+      { kind: 'topf', potId: books, amountCents: -2_500 },
+    ])
+    expect(own.status).toBe(200)
+    // Eine private Ausgabe mit der gemeinsamen Karte ist ein Einzelfall: keine Regel.
+    expect((await body(own)).rule).toBeNull()
+
+    // Der private Topf trägt die Ausgabe; „Noch ohne Aufgabe“ bleibt auf beiden Seiten gleich.
+    const ownAfter = await budget(a.token, a.householdId)
+    expect(ownAfter.pots.find((p: Json) => p.potId === books).activityCents).toBe(-2_500)
+    expect(ownAfter.readyToAssignCents).toBe(ownBefore.readyToAssignCents)
+    expect((await budget(a.token, sharedId)).readyToAssignCents).toBe(
+      sharedBefore.readyToAssignCents,
+    )
+
+    const forB = await settlements(b.token, sharedId)
+    expect(forB.balances).toEqual([
+      expect.objectContaining({
+        personId: a.id,
+        claimedCents: 0,
+        debtCents: 2_500,
+        paidBackCents: 0,
+        openCents: -2_500,
+      }),
+      expect.objectContaining({ personId: b.id, debtCents: 0, openCents: 0 }),
+    ])
+    expect(forB.openItems).toEqual([])
+    expect(forB.openDebts).toEqual([
+      {
+        transactionId: bookshop.id,
+        personId: a.id,
+        bookingDate: day(5),
+        counterpartyName: 'Buchhandlung Beispiel',
+        amountCents: 2_500,
+        openCents: 2_500,
+      },
+    ])
+    // Vom privaten Topf sieht die andere Person keine Budgetdaten.
+    expect(JSON.stringify(forB)).not.toContain(books)
+    expect(
+      (
+        await request(
+          'GET',
+          `/v1/households/${a.householdId}/budget/${current}`,
+          undefined,
+          b.token,
+        )
+      ).status,
+    ).toBe(404)
+
+    // Gemischt: Ein Teil privat, der Rest gemeinsam.
+    expect(
+      (
+        await setSplits(
+          a.token,
+          groceryRun.id,
+          [
+            { kind: 'topf', potId: groceries, amountCents: -3_000 },
+            { kind: 'topf', potId: books, amountCents: -1_000 },
+          ],
+          false,
+        )
+      ).status,
+    ).toBe(200)
+    expect(
+      (await budget(a.token, sharedId)).pots.find((p: Json) => p.potId === groceries).activityCents,
+    ).toBe(-3_000)
+
+    // Forderung und Schuld verrechnen sich: 2.000 privat für Gemeinsames bezahlt.
+    await importInto(a.token, a.accountId, [
+      { bookingDate: day(7), amountCents: -2_000, counterpartyName: 'Drogerie Beispiel' },
+    ])
+    const drugstore = (await transactions(a.token, a.accountId)).find(
+      (t) => t.counterpartyName === 'Drogerie Beispiel',
+    ) as Json
+    await setSplits(a.token, drugstore.id, [
+      { kind: 'topf', potId: groceries, amountCents: -2_000 },
+    ])
+    const netted = await settlements(a.token, sharedId)
+    expect(netted.balances[0]).toMatchObject({
+      claimedCents: 2_000,
+      debtCents: 3_500,
+      openCents: -1_500,
+    })
+    expect(netted.openItems).toEqual([])
+    // Die älteste Schuld ist zuerst gedeckt.
+    expect(netted.openDebts).toEqual([
+      expect.objectContaining({
+        transactionId: groceryRun.id,
+        amountCents: 1_000,
+        openCents: 1_000,
+      }),
+      expect.objectContaining({ transactionId: bookshop.id, amountCents: 2_500, openCents: 500 }),
+    ])
+
+    // Von Hand lässt sich nur eine eigene Forderung verbuchen, keine Schuld.
+    const manual = await request(
+      'POST',
+      `/v1/households/${sharedId}/settlements`,
+      { amountCents: 1 },
+      a.token,
+    )
+    expect((await body(manual)).error.code).toBe('ausgleich_zu_hoch')
+
+    // Zurückzahlen: Überweisung aufs gemeinsame Konto, als Ausgleich statt Einzahlung.
+    await importInto(b.token, sharedAccountId, [
+      { bookingDate: day(8), amountCents: 1_500, counterpartyIban: IBAN_A, purpose: 'Bücher' },
+    ])
+    const payback = (await transactions(a.token, sharedAccountId)).find(
+      (t) => t.amountCents === 1_500,
+    ) as Json
+    expect(payback.splits).toEqual([
+      {
+        kind: 'einzahlung',
+        potId: null,
+        personId: a.id,
+        counterAccountId: null,
+        amountCents: 1_500,
+      },
+    ])
+    const corrected = await setSplits(a.token, payback.id, [
+      { kind: 'ausgleich', personId: a.id, amountCents: 1_500 },
+    ])
+    expect(corrected.status).toBe(200)
+    // Keine Regel, sonst würden künftige Einzahlungen zum Ausgleich.
+    expect((await body(corrected)).rule).toBeNull()
+    const settled = await settlements(b.token, sharedId)
+    expect(settled.balances[0]).toMatchObject({ paidBackCents: 1_500, openCents: 0 })
+    expect(settled.openDebts).toEqual([])
+    // Die Rückzahlung ist keine Einzahlung und keine Einnahme des Gemeinsamen.
+    const contributions = await body(
+      await request(
+        'GET',
+        `/v1/households/${sharedId}/contributions/${current}`,
+        undefined,
+        a.token,
+      ),
+    )
+    expect(contributions.members[0]).toMatchObject({ personId: a.id, paidCents: 0 })
+    expect((await budget(a.token, sharedId)).readyToAssignCents).toBe(
+      sharedBefore.readyToAssignCents,
+    )
+
+    // Auf dem privaten Konto ist die Überweisung ebenfalls ein Ausgleich, ohne Wirkung aufs Budget.
+    await importInto(a.token, a.accountId, [
+      { bookingDate: day(8), amountCents: -1_500, counterpartyIban: IBAN_SHARED },
+    ])
+    const out = (await transactions(a.token, a.accountId)).find(
+      (t) => t.amountCents === -1_500,
+    ) as Json
+    expect(
+      (await setSplits(a.token, out.id, [{ kind: 'ausgleich', amountCents: -1_500 }])).status,
+    ).toBe(200)
+    expect((await budget(a.token, a.householdId)).readyToAssignCents).toBe(
+      ownBefore.readyToAssignCents,
+    )
+  })
+
+  it('lässt private Töpfe nicht in Regeln des Gemeinsamen und prüft die Datenbank', async () => {
+    const { a, sharedId, sharedAccountId } = await couple()
+    const outsider = await person('Person C', null)
+    const books = await pot(a.token, a.householdId, { name: 'Bücher', kind: 'monatlich' })
+    const strange = await pot(outsider.token, outsider.householdId, {
+      name: 'Fremd',
+      kind: 'monatlich',
+    })
+
+    // Eine Regel im Gemeinsamen träfe auch die Käufe der anderen Person.
+    const rule = await request(
+      'POST',
+      `/v1/households/${sharedId}/rules`,
+      { counterpartyName: 'Buchhandlung Beispiel', kind: 'topf', potId: books },
+      a.token,
+    )
+    expect(rule.status).toBe(422)
+    expect((await body(rule)).error.code).toBe('regel_privater_topf')
+
+    // Ein Ausgleich ohne Regelrichtung bekommt weiterhin die übliche Richtung.
+    const refundRule = await request(
+      'POST',
+      `/v1/households/${sharedId}/rules`,
+      { counterpartyIban: IBAN_A, kind: 'ausgleich', personId: a.id },
+      a.token,
+    )
+    expect((await body(refundRule)).rule).toMatchObject({ direction: 'ausgang' })
+
+    await importInto(a.token, sharedAccountId, [
+      { bookingDate: day(5), amountCents: -1_000, counterpartyName: 'Laden' },
+    ])
+    const [spend] = await transactions(a.token, sharedAccountId)
+    await expect(
+      db.begin(async (tx) => {
+        await tx`delete from transaction_splits where transaction_id = ${spend.id}`
+        await tx`
+          insert into transaction_splits (transaction_id, kind, pot_id, amount_cents)
+          values (${spend.id}, 'topf', ${strange}, -1000)
+        `
+      }),
+    ).rejects.toThrow(/Topf gehört nicht zum Haushalt/)
+    await db.begin(async (tx) => {
+      await tx`delete from transaction_splits where transaction_id = ${spend.id}`
+      await tx`
+        insert into transaction_splits (transaction_id, kind, pot_id, amount_cents)
+        values (${spend.id}, 'topf', ${books}, -1000)
+      `
+    })
+  })
+})
+
+describe('Verrechnen mit der Einzahlung', () => {
+  /** Geld laut Budget: „Noch ohne Aufgabe“ + spätere Zuweisungen + alle Töpfe. */
+  const budgetTotal = (b: Json) =>
+    b.readyToAssignCents +
+    b.assignedInFutureCents +
+    b.pots.reduce((sum: number, p: Json) => sum + p.availableCents, 0)
+  const accountTotal = async (token: string, accountId: string) =>
+    (await transactions(token, accountId)).reduce((sum, t) => sum + t.amountCents, 0)
+  const contributions = async (token: string, householdId: string, m = current) =>
+    body(await request('GET', `/v1/households/${householdId}/contributions/${m}`, undefined, token))
+  const settle = (token: string, householdId: string, input: Json) =>
+    request('POST', `/v1/households/${householdId}/settlements`, input, token)
+
+  /** Überweisung vom privaten aufs gemeinsame Konto, auf beiden Seiten importiert. */
+  async function transfer(
+    p: { token: string; accountId: string },
+    sharedAccountId: string,
+    iban: string,
+    cents: number,
+  ) {
+    await importInto(p.token, p.accountId, [
+      { bookingDate: day(3), amountCents: -cents, counterpartyIban: IBAN_SHARED },
+    ])
+    await importInto(p.token, sharedAccountId, [
+      { bookingDate: day(3), amountCents: cents, counterpartyIban: iban },
+    ])
+  }
+
+  it('zählt eine verrechnete Forderung als Einzahlung in beiden Budgets', async () => {
+    const { a, b, sharedId, sharedAccountId } = await couple()
+    await salary(a, 300_000)
+    await request(
+      'PUT',
+      `/v1/households/${sharedId}/contribution-rules/${current}`,
+      { kind: 'fest', amountCents: 50_000 },
+      a.token,
+    )
+    const groceries = await pot(a.token, sharedId, { name: 'Lebensmittel', kind: 'monatlich' })
+
+    // Forderung 50 €: privat bezahlter Einkauf im gemeinsamen Topf.
+    await importInto(a.token, a.accountId, [
+      { bookingDate: day(2), amountCents: -5_000, counterpartyName: 'Supermarkt Beispiel' },
+    ])
+    const [shopping] = await transactions(a.token, a.accountId)
+    expect(
+      (
+        await setSplits(a.token, shopping.id, [
+          { kind: 'topf', potId: groceries, amountCents: -5_000 },
+        ])
+      ).status,
+    ).toBe(200)
+    // Statt 500 € einzuzahlen und 50 € zurückzubekommen: 450 € überweisen, 50 € verrechnen.
+    await transfer(a, sharedAccountId, IBAN_A, 45_000)
+    expect((await contributions(a.token, sharedId)).members[0]).toMatchObject({
+      paidCents: 45_000,
+      remainingCents: 5_000,
+    })
+
+    // Nur die eigene Forderung, höchstens der offene Saldo.
+    expect(
+      (await body(await settle(b.token, sharedId, { amountCents: 1, kind: 'verrechnung' }))).error
+        .code,
+    ).toBe('ausgleich_zu_hoch')
+    expect(
+      (await body(await settle(a.token, sharedId, { amountCents: 5_001, kind: 'verrechnung' })))
+        .error.code,
+    ).toBe('ausgleich_zu_hoch')
+
+    const res = await settle(a.token, sharedId, {
+      amountCents: 5_000,
+      kind: 'verrechnung',
+      settledOn: day(3),
+    })
+    expect(res.status).toBe(201)
+    const view = await body(res)
+    expect(view.balances[0]).toMatchObject({ personId: a.id, repaidCents: 5_000, openCents: 0 })
+    expect(view.openItems).toEqual([])
+    expect(view.manual).toEqual([
+      expect.objectContaining({ personId: a.id, kind: 'verrechnung', amountCents: 5_000 }),
+    ])
+
+    // Das Ist der Einzahlung ist 500 €.
+    expect((await contributions(b.token, sharedId)).members[0]).toMatchObject({
+      personId: a.id,
+      paidCents: 50_000,
+      remainingCents: 0,
+    })
+
+    // Beide Budgets stimmen mit den Kontoständen überein.
+    const shared = await budget(a.token, sharedId)
+    expect(shared.inflowsCents).toBe(50_000)
+    expect(budgetTotal(shared)).toBe(45_000)
+    expect(await accountTotal(a.token, sharedAccountId)).toBe(45_000)
+    const own = await budget(a.token, a.householdId)
+    expect(own.contributionsCents).toBe(-50_000)
+    expect(own.inflowsCents).toBe(300_000)
+    expect(budgetTotal(own)).toBe(250_000)
+    expect(await accountTotal(a.token, a.accountId)).toBe(250_000)
+
+    // Zurücknehmen stellt den Stand vorher wieder her.
+    expect(
+      (await request('DELETE', `/v1/settlements/${view.manual[0].id}`, undefined, a.token)).status,
+    ).toBe(204)
+    expect((await settlements(a.token, sharedId)).balances[0].openCents).toBe(5_000)
+    expect((await contributions(a.token, sharedId)).members[0].paidCents).toBe(45_000)
+    expect(budgetTotal(await budget(a.token, sharedId))).toBe(40_000)
+    expect((await budget(a.token, a.householdId)).contributionsCents).toBe(-45_000)
+  })
+
+  it('verrechnet eine Schuld ans Gemeinsame in Gegenrichtung', async () => {
+    const { a, b, sharedId, sharedAccountId } = await couple()
+    const books = await pot(b.token, b.householdId, { name: 'Bücher', kind: 'monatlich' })
+
+    // Schuld 30 €: B zahlt mit der Karte des gemeinsamen Kontos etwas Privates.
+    await importInto(b.token, sharedAccountId, [
+      { bookingDate: day(2), amountCents: -3_000, counterpartyName: 'Buchhandlung Beispiel' },
+    ])
+    const [bookshop] = await transactions(b.token, sharedAccountId)
+    expect(
+      (await setSplits(b.token, bookshop.id, [{ kind: 'topf', potId: books, amountCents: -3_000 }]))
+        .status,
+    ).toBe(200)
+    // B zahlt 530 € ein und verrechnet 30 € davon mit der Schuld.
+    await transfer(b, sharedAccountId, IBAN_B, 53_000)
+    // Die andere Person verrechnet nichts für B.
+    expect(
+      (await body(await settle(a.token, sharedId, { amountCents: 1, kind: 'verrechnung' }))).error
+        .code,
+    ).toBe('ausgleich_zu_hoch')
+    // Ein Ausgleich von Hand bleibt der eigenen Forderung vorbehalten.
+    expect((await body(await settle(b.token, sharedId, { amountCents: 1 }))).error.code).toBe(
+      'ausgleich_zu_hoch',
+    )
+
+    const view = await body(
+      await settle(b.token, sharedId, { amountCents: 3_000, kind: 'verrechnung' }),
+    )
+    expect(view.balances[1]).toMatchObject({
+      personId: b.id,
+      debtCents: 3_000,
+      paidBackCents: 3_000,
+      openCents: 0,
+    })
+    expect(view.openDebts).toEqual([])
+    expect(view.manual[0]).toMatchObject({ kind: 'verrechnung', amountCents: -3_000 })
+
+    expect((await contributions(a.token, sharedId)).members[1]).toMatchObject({
+      personId: b.id,
+      paidCents: 50_000,
+    })
+    const shared = await budget(b.token, sharedId)
+    expect(shared.inflowsCents).toBe(50_000)
+    expect(budgetTotal(shared)).toBe(await accountTotal(b.token, sharedAccountId))
+    const own = await budget(b.token, b.householdId)
+    expect(own.contributionsCents).toBe(-50_000)
+    expect(budgetTotal(own)).toBe(await accountTotal(b.token, b.accountId))
+    expect(budgetTotal(own)).toBe(-53_000)
+  })
+
+  it('verrechnet nicht in abgeschlossenen Monaten oder vor dem Budgetbeginn', async () => {
+    const { a, sharedId } = await couple()
+    const previous = addMonthsTo(current, -1)
+    const groceries = await pot(a.token, sharedId, { name: 'Lebensmittel', kind: 'monatlich' })
+    await importInto(a.token, a.accountId, [
+      { bookingDate: day(2), amountCents: -5_000, counterpartyName: 'Supermarkt Beispiel' },
+    ])
+    const [shopping] = await transactions(a.token, a.accountId)
+    await setSplits(a.token, shopping.id, [{ kind: 'topf', potId: groceries, amountCents: -5_000 }])
+
+    const early = await settle(a.token, sharedId, {
+      amountCents: 1_000,
+      kind: 'verrechnung',
+      settledOn: `${previous}-15`,
+    })
+    expect(early.status).toBe(409)
+    expect((await body(early)).error.code).toBe('vor_budgetbeginn')
+
+    expect(
+      (
+        await request(
+          'PUT',
+          `/v1/households/${sharedId}/budget-start`,
+          { month: previous },
+          a.token,
+        )
+      ).status,
+    ).toBe(200)
+    expect(
+      (
+        await request(
+          'POST',
+          `/v1/households/${sharedId}/budget/${previous}/closing`,
+          undefined,
+          a.token,
+        )
+      ).status,
+    ).toBe(201)
+    const closed = await settle(a.token, sharedId, {
+      amountCents: 1_000,
+      kind: 'verrechnung',
+      settledOn: `${previous}-15`,
+    })
+    expect(closed.status).toBe(409)
+    expect((await body(closed)).error.code).toBe('monat_abgeschlossen')
+
+    // Ein Ausgleich von Hand wirkt nicht aufs Budget und geht weiterhin.
+    expect(
+      (await settle(a.token, sharedId, { amountCents: 1_000, settledOn: `${previous}-15` })).status,
+    ).toBe(201)
+  })
+})
+
 describe('Freigaben und Kennzahlen', () => {
   it('zeigt Kennzahlen der anderen Person nur mit Freigabe, als Anteil statt Betrag', async () => {
     const { a, b } = await couple()
@@ -628,14 +1139,16 @@ describe('Freigaben und Kennzahlen', () => {
     expect(await body(await metrics(a.token, a.id))).toEqual({
       personId: a.id,
       month: current,
-      scopes: ['erst_ich', 'ruecklagen', 'einzahlung_soll', 'budget'],
+      scopes: ['erst_ich', 'ruecklagen', 'einzahlung_soll', 'budget', 'sparquote'],
       erstIch: { hasPots: true, fulfilled: true, fundedPct: 100 },
       ruecklagen: { hasPots: true, fulfilled: false, fundedPct: 0 },
+      sparquote: { savingsRatePct: 100 },
     })
     expect(await body(await metrics(b.token, a.id))).toMatchObject({
       scopes: [],
       erstIch: null,
       ruecklagen: null,
+      sparquote: null,
     })
 
     const grant = await request('PUT', `/v1/shares/${b.id}/erst_ich`, undefined, a.token)
@@ -654,6 +1167,7 @@ describe('Freigaben und Kennzahlen', () => {
       scopes: ['erst_ich'],
       erstIch: { hasPots: true, fulfilled: true, fundedPct: 100 },
       ruecklagen: null,
+      sparquote: null,
     })
     expect(JSON.stringify(shared)).not.toMatch(/Cents/)
 
@@ -668,6 +1182,52 @@ describe('Freigaben und Kennzahlen', () => {
       (await request('DELETE', `/v1/shares/${b.id}/erst_ich`, undefined, a.token)).status,
     ).toBe(204)
     expect((await body(await metrics(b.token, a.id))).erstIch).toBeNull()
+  })
+
+  it('zeigt die Sparquote nur mit Freigabe, als Prozentwert ohne Beträge', async () => {
+    const { a, b } = await couple()
+    await salary(a, 300_000)
+    const food = await pot(a.token, a.householdId, { name: 'Lebensmittel', kind: 'monatlich' })
+    await importInto(a.token, a.accountId, [
+      {
+        bookingDate: day(2),
+        amountCents: -100_000,
+        counterpartyName: 'Gemeinschaftskonto',
+        counterpartyIban: IBAN_SHARED,
+        purpose: 'Haushaltsgeld',
+      },
+      { bookingDate: day(3), amountCents: -50_000, counterpartyName: 'Supermarkt Beispiel' },
+    ])
+    const shopping = (await transactions(a.token, a.accountId)).find(
+      (t) => t.amountCents === -50_000,
+    )!
+    await setSplits(a.token, shopping.id, [{ kind: 'topf', potId: food, amountCents: -50_000 }])
+    const metrics = (token: string, m = current) =>
+      request('GET', `/v1/persons/${a.id}/metrics/${m}`, undefined, token)
+
+    // (300 000 − 100 000 Einzahlung − 50 000 Konsum) ÷ 300 000
+    expect((await body(await metrics(a.token))).sparquote).toEqual({ savingsRatePct: 50 })
+    // Ohne Einkommen gibt es keine Quote.
+    expect((await body(await metrics(a.token, next))).sparquote).toEqual({ savingsRatePct: null })
+
+    expect((await body(await metrics(b.token))).sparquote).toBeNull()
+    await request('PUT', `/v1/shares/${b.id}/erst_ich`, undefined, a.token)
+    expect((await body(await metrics(b.token))).sparquote).toBeNull()
+
+    expect((await request('PUT', `/v1/shares/${b.id}/sparquote`, undefined, a.token)).status).toBe(
+      200,
+    )
+    const shared = await body(await metrics(b.token))
+    expect(shared).toMatchObject({
+      scopes: ['erst_ich', 'sparquote'],
+      sparquote: { savingsRatePct: 50 },
+    })
+    expect(JSON.stringify(shared)).not.toMatch(/Cents/)
+
+    expect(
+      (await request('DELETE', `/v1/shares/${b.id}/sparquote`, undefined, a.token)).status,
+    ).toBe(204)
+    expect((await body(await metrics(b.token))).sparquote).toBeNull()
   })
 
   it('gibt nur an die Person mit gemeinsamem Haushalt frei', async () => {

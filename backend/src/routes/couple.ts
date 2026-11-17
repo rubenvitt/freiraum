@@ -6,6 +6,7 @@ import {
   type ContributionsView,
   type Metrics,
   type ReceivedShare,
+  SETTLEMENT_KINDS,
   type SettlementsView,
   SHARE_SCOPES,
   type ShareEntry,
@@ -19,7 +20,16 @@ const ShareScope = z.enum(SHARE_SCOPES).openapi({
     'erst_ich = ob die Erst-ich-Töpfe des Monats gefüllt sind (Anteil, kein Betrag); ' +
     'ruecklagen = ob die Rücklagen ihre Monatsrate haben (Anteil); einzahlung_soll = Soll der ' +
     'eigenen Einzahlungsregel „Prozent vom Netto“ (verrät sonst das Einkommen); budget = Budget ' +
-    'und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern)',
+    'und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern); sparquote = ' +
+    'Sparquote des Monats als Prozentwert (ohne Beträge)',
+})
+
+const SettlementKind = z.enum(SETTLEMENT_KINDS).openapi({
+  description:
+    'zahlung = Geld außerhalb der Konten erhalten (z. B. bar), ohne Wirkung aufs Budget; ' +
+    'verrechnung = mit der Einzahlung verrechnet: zählt wie eine Einzahlung im Ist, im ' +
+    'gemeinsamen Budget als Eingang und im privaten Budget der Person als Minderung von „Noch ' +
+    'ohne Aufgabe“',
 })
 
 const ShareSchema = z
@@ -49,6 +59,20 @@ const PotProgressSchema = z
   })
   .openapi('PotProgress')
 
+const SavingsRateSchema = z
+  .object({
+    savingsRatePct: z
+      .number()
+      .int()
+      .nullable()
+      .openapi({
+        description:
+          'Sparquote: (Einkommen − Konsum − Einzahlungen ins Gemeinsame) ÷ Einkommen in Prozent, ' +
+          'abgerundet, kann negativ sein; null ohne Einkommen im Monat',
+      }),
+  })
+  .openapi('SavingsRate')
+
 const MetricsSchema = z
   .object({
     personId: z.uuid(),
@@ -56,20 +80,21 @@ const MetricsSchema = z
     scopes: z.array(ShareScope).openapi({ description: 'sichtbare Kennzahlen' }),
     erstIch: PotProgressSchema.nullable(),
     ruecklagen: PotProgressSchema.nullable(),
+    sparquote: SavingsRateSchema.nullable(),
   })
-  .openapi('Metrics')
+  .openapi('PersonMetrics')
 
-const ContributionRuleSchema = z
-  .object({
-    householdId: z.uuid(),
-    personId: z.uuid(),
-    validFrom: Month,
-    kind: z.enum(['fest', 'prozent']),
-    amountCents: z.number().int().nullable(),
-    percentBp: z.number().int().nullable(),
-    updatedAt: z.iso.datetime(),
-  })
-  .openapi('ContributionRule')
+const ContributionRuleFields = z.object({
+  householdId: z.uuid(),
+  personId: z.uuid(),
+  validFrom: Month,
+  kind: z.enum(['fest', 'prozent']),
+  amountCents: z.number().int().nullable(),
+  percentBp: z.number().int().nullable(),
+  updatedAt: z.iso.datetime(),
+})
+
+const ContributionRuleSchema = ContributionRuleFields.openapi('ContributionRule')
 
 const ContributionsSchema = z
   .object({
@@ -79,13 +104,18 @@ const ContributionsSchema = z
       z.object({
         personId: z.uuid(),
         displayName: z.string(),
-        rule: ContributionRuleSchema.nullable().openapi({ description: 'gültige Regel im Monat' }),
+        // Inline statt Verweis: Aus Verweis + nullable wird allOf, und das liest der generierte
+        // Swift-Client nicht als optional (FREI-26).
+        rule: ContributionRuleFields.nullable().openapi({ description: 'gültige Regel im Monat' }),
         targetCents: z.number().int().nullable().openapi({ description: 'Soll' }),
         targetVisible: z.boolean().openapi({
           description:
             'false bei „Prozent vom Netto“ der anderen Person ohne Freigabe einzahlung_soll',
         }),
-        paidCents: z.number().int().openapi({ description: 'Ist: Einzahlungen im Monat' }),
+        paidCents: z.number().int().openapi({
+          description:
+            'Ist: Einzahlungen im Monat, plus verrechnete Forderungen und minus verrechnete Schulden',
+        }),
         remainingCents: z.number().int().nullable().openapi({ description: 'Soll − Ist, ≥ 0' }),
       }),
     ),
@@ -103,11 +133,25 @@ const SettlementsSchema = z
           .number()
           .int()
           .openapi({ description: 'privat bezahlte gemeinsame Ausgaben' }),
-        repaidCents: z.number().int().openapi({ description: 'erstattet (Überweisung, von Hand)' }),
+        repaidCents: z
+          .number()
+          .int()
+          .openapi({ description: 'erstattet (Überweisung, von Hand, verrechnet)' }),
+        debtCents: z
+          .number()
+          .int()
+          .openapi({ description: 'vom gemeinsamen Konto bezahlte private Ausgaben' }),
+        paidBackCents: z.number().int().openapi({
+          description: 'zurückgezahlt (Überweisung aufs gemeinsame Konto, verrechnet)',
+        }),
         openCents: z
           .number()
           .int()
-          .openapi({ description: 'schuldet das Gemeinsame der Person noch; negativ = zu viel' }),
+          .openapi({
+            description:
+              'Saldo: positiv = schuldet das Gemeinsame der Person, negativ = schuldet die Person ' +
+              'dem Gemeinsamen',
+          }),
       }),
     ),
     openItems: z.array(
@@ -120,11 +164,35 @@ const SettlementsSchema = z
         openCents: z.number().int(),
       }),
     ),
+    openDebts: z
+      .array(
+        z.object({
+          transactionId: z.uuid(),
+          personId: z.uuid(),
+          bookingDate: IsoDate,
+          counterpartyName: z.string().nullable(),
+          amountCents: z.number().int().openapi({ description: 'privater Anteil der Buchung' }),
+          openCents: z.number().int(),
+        }),
+      )
+      .openapi({
+        description:
+          'Buchungen des gemeinsamen Kontos in privaten Töpfen, die noch nicht zurückgezahlt ' +
+          'oder mit Forderungen verrechnet sind (ohne den Topf selbst)',
+      }),
     manual: z.array(
       z.object({
         id: z.uuid(),
         personId: z.uuid(),
-        amountCents: z.number().int(),
+        kind: SettlementKind,
+        amountCents: z
+          .number()
+          .int()
+          .openapi({
+            description:
+              'positiv = das Gemeinsame erstattet der Person; negativ = die Person zahlt dem ' +
+              'Gemeinsamen zurück (nur bei verrechnung)',
+          }),
         settledOn: IsoDate,
         note: z.string().nullable(),
         createdAt: z.iso.datetime(),
@@ -307,11 +375,14 @@ const getSettlements = createRoute({
   method: 'get',
   path: '/v1/households/{householdId}/settlements',
   tags: ['Paar'],
-  summary: 'Ausgleich: was das Gemeinsame jeder Person für privat bezahlte Ausgaben schuldet',
+  summary: 'Ausgleich: was das Gemeinsame und die Personen einander schulden',
   description:
-    'Entsteht, wenn eine Buchung eines privaten Kontos einem Topf des gemeinsamen Haushalts ' +
-    'zugeordnet wird. Erledigt wird er durch eine Überweisung vom gemeinsamen Konto (Art ' +
-    'ausgleich) oder von Hand. Erstattungen decken die Ausgaben der Reihe nach, älteste zuerst.',
+    'Eine Forderung entsteht, wenn eine Buchung eines privaten Kontos einem Topf des ' +
+    'gemeinsamen Haushalts zugeordnet wird. Erledigt wird sie durch eine Überweisung vom ' +
+    'gemeinsamen Konto (Art ausgleich) oder von Hand. Eine Schuld entsteht umgekehrt, wenn eine ' +
+    'Buchung des gemeinsamen Kontos dem privaten Topf einer Person zugeordnet wird; sie zahlt ' +
+    'sie per Überweisung aufs gemeinsame Konto (Art ausgleich) zurück. Forderung und Schuld ' +
+    'verrechnen sich; Erstattungen decken der Reihe nach, älteste zuerst.',
   security,
   middleware: [requireAuth] as const,
   request: { params: z.object({ householdId: pathId('householdId') }) },
@@ -328,7 +399,14 @@ const recordSettlement = createRoute({
   method: 'post',
   path: '/v1/households/{householdId}/settlements',
   tags: ['Paar'],
-  summary: 'Ausgleich von Hand verbuchen (z. B. bar erhalten), nur für die eigene Forderung',
+  summary: 'Ausgleich von Hand verbuchen oder mit der Einzahlung verrechnen',
+  description:
+    'Nur für den eigenen Saldo und höchstens so viel, wie offen ist. Eine Zahlung (z. B. bar ' +
+    'erhalten) gibt es nur für eine Forderung. Eine Verrechnung geht in beide Richtungen und ' +
+    'ergibt sich aus dem Saldo: Bei einer Forderung zählt sie als Erstattung und als zusätzliche ' +
+    'Einzahlung (450 € überwiesen + 50 € verrechnet = 500 € Ist), bei einer Schuld als ' +
+    'Rückzahlung und als geringere Einzahlung. Sie ändert das private Budget der Person und geht ' +
+    'deshalb nicht in abgeschlossenen Monaten und nicht vor dem Budgetbeginn.',
   security,
   middleware: [requireAuth] as const,
   request: {
@@ -336,7 +414,10 @@ const recordSettlement = createRoute({
     body: json(
       z.object({
         amountCents: z.number().int().min(1).max(100_000_000_000),
-        settledOn: IsoDate.optional(),
+        kind: SettlementKind.optional().openapi({ description: 'Standard: zahlung' }),
+        settledOn: IsoDate.optional().openapi({
+          description: 'Standard: heute; bei verrechnung zählt der Monat für Ist und Budget',
+        }),
         note: z.string().trim().max(300).optional(),
       }),
       'Erhaltener Betrag',
@@ -347,6 +428,7 @@ const recordSettlement = createRoute({
     400: error('Ungültige Anfrage'),
     401: error('Nicht angemeldet'),
     404: error('Haushalt nicht gefunden (oder kein Zugriff)'),
+    409: error('Verrechnung in einem abgeschlossenen Monat oder vor dem Budgetbeginn'),
     422: error('Kein gemeinsamer Haushalt oder mehr als offen'),
   },
 })
@@ -365,6 +447,7 @@ const deleteSettlement = createRoute({
     401: error('Nicht angemeldet'),
     403: error('Ausgleich einer anderen Person'),
     404: error('Ausgleich nicht gefunden (oder kein Zugriff)'),
+    409: error('Verrechnung in einem abgeschlossenen Monat oder vor dem Budgetbeginn'),
   },
 })
 
