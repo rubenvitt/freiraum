@@ -1,11 +1,16 @@
 import { OpenAPIHono } from '@hono/zod-openapi'
 import type { Person } from './auth/service.js'
 import { AuthService } from './auth/service.js'
+import { BudgetService } from './budget/service.js'
+import type { LlmCategorizer } from './categorize/llm.js'
+import { CategorizationService } from './categorize/service.js'
 import type { Config } from './config.js'
 import type { Db } from './db/client.js'
 import { ApiError } from './errors.js'
 import { LedgerService } from './ledger/service.js'
 import { authRoutes } from './routes/auth.js'
+import { budgetRoutes } from './routes/budget.js'
+import { categorizeRoutes } from './routes/categorize.js'
 import { healthRoutes } from './routes/health.js'
 import { ledgerRoutes } from './routes/ledger.js'
 
@@ -14,6 +19,8 @@ export const API_VERSION = '0.1.0'
 export type AppEnv = {
   Variables: {
     auth: AuthService
+    budget: BudgetService
+    categorize: CategorizationService
     db: Db
     ledger: LedgerService
     session: { id: string; person: Person }
@@ -22,9 +29,19 @@ export type AppEnv = {
 
 const errorBody = (code: string, message: string) => ({ error: { code, message } })
 
-export function createApp(deps: { db: Db; config: Config }) {
+export function createApp(deps: { db: Db; config: Config; llm?: LlmCategorizer | null }) {
   const auth = new AuthService(deps.db, deps.config)
-  const ledger = new LedgerService(deps.db)
+  const budget = new BudgetService(deps.db)
+  const categorize = new CategorizationService(deps.db, budget, deps.llm ?? null)
+  const ledger = new LedgerService(deps.db, {
+    // Regeln in der Import-Transaktion, LLM danach (Netzwerk, ohne offene Transaktion).
+    inTransaction: async (tx, ids, asOf) => {
+      await categorize.applyRules(tx, ids, asOf)
+    },
+    afterCommit: async (ids, asOf) => {
+      await categorize.suggestWithLlm(ids, asOf)
+    },
+  })
 
   const app = new OpenAPIHono<AppEnv>({
     defaultHook: (result, c) => {
@@ -44,6 +61,8 @@ export function createApp(deps: { db: Db; config: Config }) {
 
   app.use(async (c, next) => {
     c.set('auth', auth)
+    c.set('budget', budget)
+    c.set('categorize', categorize)
     c.set('db', deps.db)
     c.set('ledger', ledger)
     await next()
@@ -69,10 +88,12 @@ export function createApp(deps: { db: Db; config: Config }) {
   healthRoutes(app, deps.config)
   authRoutes(app)
   ledgerRoutes(app)
+  budgetRoutes(app)
+  categorizeRoutes(app)
 
   app.doc31('/openapi.json', openApiInfo)
 
-  return { app, auth, ledger }
+  return { app, auth, budget, categorize, ledger }
 }
 
 export const openApiInfo = {

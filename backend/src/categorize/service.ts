@@ -1,0 +1,682 @@
+/**
+ * Kategorisierung mit wenig Pflege: Regeln greifen zuerst, ohne Treffer schlägt ein LLM vor
+ * (falls angebunden). Vorschläge legen gleich eine Aufteilung an (Status `vorgeschlagen`), damit
+ * das Budget stimmt, bevor jemand bestätigt. Eine Korrektur wird zur Regel.
+ *
+ * Zugriff: nur Mitglieder des Haushalts, zu dem das Konto gehört. Töpfe kommen immer aus dem
+ * Haushalt des Kontos (die Datenbank prüft das zusätzlich). Ausgleich zwischen Haushalten
+ * kommt mit E4.
+ */
+import type { TransactionSql } from 'postgres'
+import { monthOf } from '../budget/months.js'
+import type { BudgetService } from '../budget/service.js'
+import { cents } from '../db/cents.js'
+import type { Db } from '../db/client.js'
+import { ApiError } from '../errors.js'
+import { type IsoDate, todayUtc } from '../ledger/dates.js'
+import type { LlmCategorizer, LlmOption, LlmSuggestion } from './llm.js'
+import {
+  bestRule,
+  criteriaFromCorrection,
+  describeCriteria,
+  type MatchableTransaction,
+  type Rule,
+  type RuleCriteria,
+  type SplitKind,
+  type Target,
+} from './rules.js'
+
+type Sql = Db | TransactionSql
+
+export interface Split {
+  kind: SplitKind
+  potId: string | null
+  amountCents: number
+}
+
+export interface Suggestion {
+  source: 'regel' | 'llm'
+  kind: SplitKind
+  potId: string | null
+  confidencePct: number
+  reason: string
+  ruleId: string | null
+}
+
+export interface Categorization {
+  splits: Split[]
+  suggestion: Suggestion | null
+}
+
+export type RuleInput = Partial<RuleCriteria> & Target
+
+/** Aufteilungen und Vorschläge zu Buchungen laden (für Listen). */
+export async function loadCategorizations(
+  sql: Sql,
+  transactionIds: string[],
+): Promise<Map<string, Categorization>> {
+  const result = new Map<string, Categorization>(
+    transactionIds.map((id) => [id, { splits: [], suggestion: null }]),
+  )
+  if (transactionIds.length === 0) return result
+  const splits = await sql<
+    { transaction_id: string; kind: SplitKind; pot_id: string | null; amount_cents: string }[]
+  >`
+    select transaction_id, kind, pot_id, amount_cents from transaction_splits
+    where transaction_id = any(${transactionIds}::uuid[])
+    order by transaction_id, abs(amount_cents) desc, id
+  `
+  for (const s of splits) {
+    result.get(s.transaction_id)?.splits.push({
+      kind: s.kind,
+      potId: s.pot_id,
+      amountCents: cents(s.amount_cents),
+    })
+  }
+  const suggestions = await sql<
+    {
+      transaction_id: string
+      source: 'regel' | 'llm'
+      kind: SplitKind
+      pot_id: string | null
+      confidence_pct: number
+      reason: string
+      rule_id: string | null
+    }[]
+  >`
+    select transaction_id, source, kind, pot_id, confidence_pct, reason, rule_id
+    from transaction_suggestions where transaction_id = any(${transactionIds}::uuid[])
+  `
+  for (const s of suggestions) {
+    const entry = result.get(s.transaction_id)
+    if (entry) {
+      entry.suggestion = {
+        source: s.source,
+        kind: s.kind,
+        potId: s.pot_id,
+        confidencePct: s.confidence_pct,
+        reason: s.reason,
+        ruleId: s.rule_id,
+      }
+    }
+  }
+  return result
+}
+
+interface RuleRow {
+  id: string
+  household_id: string
+  account_id: string | null
+  direction: 'eingang' | 'ausgang' | null
+  counterparty_iban: string | null
+  counterparty_name: string | null
+  purpose_contains: string | null
+  min_amount_cents: string | null
+  max_amount_cents: string | null
+  kind: SplitKind
+  pot_id: string | null
+  origin: 'korrektur' | 'manuell'
+  created_at: Date
+  updated_at: Date
+}
+
+const toRule = (r: RuleRow): Rule => ({
+  id: r.id,
+  householdId: r.household_id,
+  accountId: r.account_id,
+  direction: r.direction,
+  counterpartyIban: r.counterparty_iban,
+  counterpartyName: r.counterparty_name,
+  purposeContains: r.purpose_contains,
+  minAmountCents: r.min_amount_cents === null ? null : cents(r.min_amount_cents),
+  maxAmountCents: r.max_amount_cents === null ? null : cents(r.max_amount_cents),
+  kind: r.kind,
+  potId: r.pot_id,
+  origin: r.origin,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+})
+
+interface TxRow {
+  id: string
+  account_id: string
+  household_id: string
+  booking_date: string
+  amount_cents: string
+  counterparty_name: string | null
+  counterparty_iban: string | null
+  purpose: string | null
+  status: 'importiert' | 'vorgeschlagen' | 'bestaetigt'
+}
+
+const toMatchable = (t: TxRow): MatchableTransaction => ({
+  accountId: t.account_id,
+  amountCents: cents(t.amount_cents),
+  counterpartyName: t.counterparty_name,
+  counterpartyIban: t.counterparty_iban,
+  purpose: t.purpose,
+})
+
+const transactionNotFound = () =>
+  new ApiError(404, 'buchung_nicht_gefunden', 'Diese Buchung gibt es nicht.')
+
+const sameTarget = (a: Target, b: Target) => a.kind === b.kind && a.potId === b.potId
+
+export class CategorizationService {
+  constructor(
+    private readonly db: Db,
+    private readonly budget: BudgetService,
+    private readonly llm: LlmCategorizer | null = null,
+  ) {}
+
+  // --- Hilfen ------------------------------------------------------------------
+
+  private async loadTransactions(sql: Sql, ids: string[]): Promise<TxRow[]> {
+    if (ids.length === 0) return []
+    return sql<TxRow[]>`
+      select t.id, t.account_id, a.household_id, t.booking_date::text, t.amount_cents,
+             t.counterparty_name, t.counterparty_iban, t.purpose, t.status
+      from transactions t join accounts a on a.id = t.account_id
+      where t.id = any(${ids}::uuid[])
+    `
+  }
+
+  /**
+   * Buchung sperren, sofern die Person Zugriff hat; sonst 404. Vorher werden alle Konten des
+   * Haushalts in fester Reihenfolge gesperrt: Korrekturen schreiben Vorschläge auch in andere
+   * Konten, und Importe sperren ihr Konto, bevor sie den Haushalt sperren.
+   */
+  private async lockAccessibleTransaction(
+    tx: TransactionSql,
+    personId: string,
+    transactionId: string,
+  ): Promise<TxRow> {
+    const [access] = await tx<{ household_id: string }[]>`
+      select a.household_id from transactions t
+      join accounts a on a.id = t.account_id
+      join household_members m on m.household_id = a.household_id and m.person_id = ${personId}
+      where t.id = ${transactionId}
+    `
+    if (!access) throw transactionNotFound()
+    await this.lockHouseholdAccounts(tx, access.household_id)
+    const [row] = await tx<TxRow[]>`
+      select t.id, t.account_id, a.household_id, t.booking_date::text, t.amount_cents,
+             t.counterparty_name, t.counterparty_iban, t.purpose, t.status
+      from transactions t join accounts a on a.id = t.account_id
+      where t.id = ${transactionId}
+      for update of t
+    `
+    if (!row) throw transactionNotFound()
+    return row
+  }
+
+  private async lockHouseholdAccounts(tx: TransactionSql, householdId: string): Promise<void> {
+    await tx`select id from accounts where household_id = ${householdId} order by id for update`
+  }
+
+  private async activeRules(sql: Sql, householdId: string): Promise<Rule[]> {
+    const rows = await sql<RuleRow[]>`
+      select r.* from category_rules r
+      left join pots p on p.id = r.pot_id
+      where r.household_id = ${householdId} and (r.pot_id is null or p.archived_at is null)
+    `
+    return rows.map(toRule)
+  }
+
+  /** Ziel prüfen: Topf muss zum Haushalt gehören und aktiv sein. */
+  private async checkTarget(sql: Sql, householdId: string, target: Target): Promise<void> {
+    if ((target.kind === 'topf') !== (target.potId !== null)) {
+      throw new ApiError(422, 'ziel_ungueltig', 'Ein Topf ist genau bei der Art „topf“ anzugeben.')
+    }
+    if (target.potId === null) return
+    const [pot] = await sql<{ household_id: string; archived_at: Date | null }[]>`
+      select household_id, archived_at from pots where id = ${target.potId}
+    `
+    if (!pot || pot.household_id !== householdId) {
+      throw new ApiError(
+        422,
+        'topf_anderer_haushalt',
+        'Der Topf gehört nicht zum Haushalt dieses Kontos.',
+      )
+    }
+    if (pot.archived_at !== null) {
+      throw new ApiError(422, 'topf_archiviert', 'Dieser Topf ist archiviert.')
+    }
+  }
+
+  private async replaceSplits(
+    tx: TransactionSql,
+    transactionId: string,
+    splits: Split[],
+  ): Promise<void> {
+    await tx`delete from transaction_splits where transaction_id = ${transactionId}`
+    if (splits.length === 0) return
+    await tx`
+      insert into transaction_splits ${tx(
+        splits.map((s) => ({
+          transaction_id: transactionId,
+          kind: s.kind,
+          pot_id: s.potId,
+          amount_cents: s.amountCents,
+        })),
+      )}
+    `
+  }
+
+  /** Erst-ich für alle berührten Haushalt-Monate neu rechnen. */
+  private async refreshErstIch(
+    tx: TransactionSql,
+    touched: Iterable<{ householdId: string; bookingDate: string }>,
+    asOf: IsoDate,
+  ): Promise<void> {
+    const keys = new Set<string>()
+    for (const t of touched) keys.add(`${t.householdId}|${monthOf(t.bookingDate)}`)
+    for (const key of [...keys].sort()) {
+      const [householdId, month] = key.split('|') as [string, string]
+      await this.budget.runErstIch(tx, householdId, month, asOf)
+    }
+  }
+
+  // --- Regeln anwenden ---------------------------------------------------------
+
+  /**
+   * Regeln auf noch nicht bestätigte Buchungen anwenden. Ein Treffer ersetzt Aufteilung und
+   * Vorschlag; ohne Treffer bleibt ein vorhandener LLM-Vorschlag stehen, ein veralteter
+   * Regelvorschlag wird entfernt. Erwartet eine offene Transaktion (Konto bereits gesperrt
+   * oder nicht nötig, weil die Buchungen frisch sind).
+   */
+  async applyRules(tx: TransactionSql, transactionIds: string[], asOf: IsoDate): Promise<number> {
+    const rows = (await this.loadTransactions(tx, transactionIds)).filter(
+      (t) => t.status !== 'bestaetigt',
+    )
+    const rulesByHousehold = new Map<string, Rule[]>()
+    const touched: TxRow[] = []
+    let suggested = 0
+    for (const t of rows) {
+      let rules = rulesByHousehold.get(t.household_id)
+      if (!rules) {
+        rules = await this.activeRules(tx, t.household_id)
+        rulesByHousehold.set(t.household_id, rules)
+      }
+      const rule = bestRule(rules, toMatchable(t))
+      if (!rule) {
+        const [stale] = await tx<{ n: number }[]>`
+          with removed as (
+            delete from transaction_suggestions
+            where transaction_id = ${t.id} and source = 'regel' returning 1
+          )
+          select count(*)::int as n from removed
+        `
+        if (stale && stale.n > 0) {
+          await this.replaceSplits(tx, t.id, [])
+          await tx`update transactions set status = 'importiert' where id = ${t.id}`
+          touched.push(t)
+        }
+        continue
+      }
+      const target = { kind: rule.kind, potId: rule.potId }
+      await this.replaceSplits(tx, t.id, [{ ...target, amountCents: cents(t.amount_cents) }])
+      const reason = `Regel: ${describeCriteria(rule)}`.slice(0, 300)
+      await tx`
+        insert into transaction_suggestions
+          (transaction_id, source, kind, pot_id, confidence_pct, reason, rule_id)
+        values (${t.id}, 'regel', ${target.kind}, ${target.potId}, 100, ${reason}, ${rule.id})
+        on conflict (transaction_id) do update set
+          source = excluded.source, kind = excluded.kind, pot_id = excluded.pot_id,
+          confidence_pct = excluded.confidence_pct, reason = excluded.reason,
+          rule_id = excluded.rule_id, created_at = now()
+      `
+      await tx`update transactions set status = 'vorgeschlagen' where id = ${t.id}`
+      touched.push(t)
+      suggested++
+    }
+    await this.refreshErstIch(
+      tx,
+      touched.map((t) => ({ householdId: t.household_id, bookingDate: t.booking_date })),
+      asOf,
+    )
+    return suggested
+  }
+
+  // --- LLM ---------------------------------------------------------------------
+
+  /**
+   * LLM-Vorschläge für Buchungen ohne Aufteilung holen, die noch nie gefragt wurden. Läuft
+   * außerhalb der Import-Transaktion (Netzwerk). Fehler des Modells lassen die Buchung
+   * unverändert („importiert“), sie wartet dann auf eine Person.
+   */
+  async suggestWithLlm(transactionIds: string[], asOf: IsoDate = todayUtc()): Promise<number> {
+    if (!this.llm || transactionIds.length === 0) return 0
+    const pending = await this.db<TxRow[]>`
+      select t.id, t.account_id, a.household_id, t.booking_date::text, t.amount_cents,
+             t.counterparty_name, t.counterparty_iban, t.purpose, t.status
+      from transactions t join accounts a on a.id = t.account_id
+      where t.id = any(${transactionIds}::uuid[])
+        and t.status = 'importiert' and t.llm_checked_at is null
+      order by t.booking_date, t.id
+    `
+    let suggested = 0
+    const optionsByHousehold = new Map<string, LlmOption[]>()
+    for (const t of pending) {
+      let options = optionsByHousehold.get(t.household_id)
+      if (!options) {
+        options = await this.llmOptions(t.household_id)
+        optionsByHousehold.set(t.household_id, options)
+      }
+      let result: LlmSuggestion | null = null
+      try {
+        result = await this.llm.suggest({
+          transaction: {
+            bookingDate: t.booking_date,
+            amountCents: cents(t.amount_cents),
+            counterpartyName: t.counterparty_name,
+            purpose: t.purpose,
+          },
+          options,
+        })
+      } catch (err) {
+        console.error('LLM-Vorschlag fehlgeschlagen', err instanceof Error ? err.message : err)
+      }
+      const valid =
+        result !== null &&
+        options.some((o) => o.kind === result.kind && o.potId === result.potId) &&
+        Number.isInteger(result.confidencePct) &&
+        result.confidencePct >= 0 &&
+        result.confidencePct <= 100 &&
+        result.reason.trim().length > 0
+      await this.db.begin(async (tx) => {
+        const [row] = await tx<{ status: string }[]>`
+          select t.status from transactions t join accounts a on a.id = t.account_id
+          where t.id = ${t.id}
+          for update of a, t
+        `
+        await tx`update transactions set llm_checked_at = now() where id = ${t.id}`
+        if (!valid || !result || row?.status !== 'importiert') return
+        await this.replaceSplits(tx, t.id, [
+          { kind: result.kind, potId: result.potId, amountCents: cents(t.amount_cents) },
+        ])
+        await tx`
+          insert into transaction_suggestions
+            (transaction_id, source, kind, pot_id, confidence_pct, reason)
+          values (${t.id}, 'llm', ${result.kind}, ${result.potId}, ${result.confidencePct},
+                  ${result.reason.trim().replace(/\s+/g, ' ').slice(0, 300)})
+          on conflict (transaction_id) do update set
+            source = excluded.source, kind = excluded.kind, pot_id = excluded.pot_id,
+            confidence_pct = excluded.confidence_pct, reason = excluded.reason,
+            rule_id = null, created_at = now()
+        `
+        await tx`update transactions set status = 'vorgeschlagen' where id = ${t.id}`
+        await this.refreshErstIch(
+          tx,
+          [{ householdId: t.household_id, bookingDate: t.booking_date }],
+          asOf,
+        )
+        suggested++
+      })
+    }
+    return suggested
+  }
+
+  private async llmOptions(householdId: string): Promise<LlmOption[]> {
+    const pots = await this.db<{ id: string; name: string; group_name: string | null }[]>`
+      select id, name, group_name from pots
+      where household_id = ${householdId} and archived_at is null
+      order by sort_order, created_at
+    `
+    return [
+      { kind: 'einnahme', potId: null, label: 'Einnahme (Noch ohne Aufgabe)', groupName: null },
+      {
+        kind: 'umbuchung',
+        potId: null,
+        label: 'Umbuchung zwischen eigenen Konten',
+        groupName: null,
+      },
+      ...pots.map((p) => ({
+        kind: 'topf' as const,
+        potId: p.id,
+        label: p.name,
+        groupName: p.group_name,
+      })),
+    ]
+  }
+
+  // --- Bestätigen und korrigieren ----------------------------------------------
+
+  /** Vorschlag mit einem Tipp übernehmen. */
+  async confirm(
+    personId: string,
+    transactionId: string,
+  ): Promise<{ transactionId: string; status: 'bestaetigt' }> {
+    return this.db.begin(async (tx) => {
+      const t = await this.lockAccessibleTransaction(tx, personId, transactionId)
+      if (t.status === 'importiert') {
+        throw new ApiError(
+          409,
+          'kein_vorschlag',
+          'Zu dieser Buchung gibt es keinen Vorschlag, bitte selbst zuordnen.',
+        )
+      }
+      if (t.status === 'vorgeschlagen') {
+        await tx`
+          update transactions set status = 'bestaetigt', confirmed_by = ${personId},
+            confirmed_at = now()
+          where id = ${t.id}
+        `
+      }
+      return { transactionId: t.id, status: 'bestaetigt' as const }
+    })
+  }
+
+  /**
+   * Aufteilung festlegen und damit bestätigen. Weicht eine einfache Zuordnung vom Vorschlag ab
+   * (oder gab es keinen), entsteht eine Regel für die Gegenpartei, und die übrigen offenen
+   * Buchungen des Haushalts werden neu vorgeschlagen.
+   */
+  async setSplits(
+    personId: string,
+    transactionId: string,
+    splits: Split[],
+    options: { learn: boolean } = { learn: true },
+    asOf: IsoDate = todayUtc(),
+  ): Promise<{ rule: Rule | null; resuggested: number }> {
+    return this.db.begin(async (tx) => {
+      const t = await this.lockAccessibleTransaction(tx, personId, transactionId)
+      const amount = cents(t.amount_cents)
+      if (splits.length === 0) {
+        throw new ApiError(422, 'aufteilung_leer', 'Mindestens eine Aufteilung ist nötig.')
+      }
+      const total = splits.reduce((sum, s) => sum + s.amountCents, 0)
+      if (total !== amount) {
+        throw new ApiError(
+          422,
+          'aufteilung_summe',
+          `Die Aufteilungen ergeben ${total} Cent, die Buchung hat ${amount} Cent.`,
+        )
+      }
+      for (const s of splits) await this.checkTarget(tx, t.household_id, s)
+
+      const before = (await loadCategorizations(tx, [t.id])).get(t.id)
+      await this.replaceSplits(tx, t.id, splits)
+      await tx`
+        update transactions set status = 'bestaetigt', confirmed_by = ${personId},
+          confirmed_at = now()
+        where id = ${t.id}
+      `
+
+      let rule: Rule | null = null
+      let resuggested = 0
+      const [only] = splits
+      const corrected =
+        splits.length === 1 &&
+        only !== undefined &&
+        (!before?.suggestion || !sameTarget(before.suggestion, only))
+      const criteria = corrected && options.learn ? criteriaFromCorrection(toMatchable(t)) : null
+      if (criteria && only) {
+        rule = await this.upsertRule(tx, t.household_id, personId, criteria, only, 'korrektur')
+        const open = await tx<{ id: string }[]>`
+          select t.id from transactions t join accounts a on a.id = t.account_id
+          where a.household_id = ${t.household_id} and t.status <> 'bestaetigt'
+        `
+        resuggested = await this.applyRules(
+          tx,
+          open.map((o) => o.id),
+          asOf,
+        )
+      }
+      await this.refreshErstIch(
+        tx,
+        [{ householdId: t.household_id, bookingDate: t.booking_date }],
+        asOf,
+      )
+      return { rule, resuggested }
+    })
+  }
+
+  // --- Regeln verwalten --------------------------------------------------------
+
+  private async upsertRule(
+    tx: TransactionSql,
+    householdId: string,
+    personId: string,
+    criteria: RuleCriteria,
+    target: Target,
+    origin: 'korrektur' | 'manuell',
+  ): Promise<Rule> {
+    // Gleiche Merkmale: bestehende Regel umlenken statt eine zweite anzulegen.
+    const [existing] = await tx<RuleRow[]>`
+      select * from category_rules
+      where household_id = ${householdId}
+        and account_id is not distinct from ${criteria.accountId}
+        and direction is not distinct from ${criteria.direction}
+        and counterparty_iban is not distinct from ${criteria.counterpartyIban}
+        and lower(counterparty_name) is not distinct from lower(${criteria.counterpartyName})
+        and lower(purpose_contains) is not distinct from lower(${criteria.purposeContains})
+        and min_amount_cents is not distinct from ${criteria.minAmountCents}
+        and max_amount_cents is not distinct from ${criteria.maxAmountCents}
+      limit 1
+    `
+    const [row] = existing
+      ? await tx<RuleRow[]>`
+          update category_rules set kind = ${target.kind}, pot_id = ${target.potId},
+            origin = ${origin}, updated_at = now()
+          where id = ${existing.id}
+          returning *
+        `
+      : await tx<RuleRow[]>`
+          insert into category_rules (
+            household_id, account_id, direction, counterparty_iban, counterparty_name,
+            purpose_contains, min_amount_cents, max_amount_cents, kind, pot_id, origin, created_by
+          ) values (
+            ${householdId}, ${criteria.accountId}, ${criteria.direction},
+            ${criteria.counterpartyIban}, ${criteria.counterpartyName},
+            ${criteria.purposeContains}, ${criteria.minAmountCents}, ${criteria.maxAmountCents},
+            ${target.kind}, ${target.potId}, ${origin}, ${personId}
+          )
+          returning *
+        `
+    if (!row) throw new Error('Regel konnte nicht gespeichert werden')
+    return toRule(row)
+  }
+
+  async listRules(personId: string, householdId: string): Promise<Rule[]> {
+    await this.budget.householdAccess(this.db, personId, householdId)
+    const rows = await this.db<RuleRow[]>`
+      select * from category_rules where household_id = ${householdId}
+      order by updated_at desc, id
+    `
+    return rows.map(toRule)
+  }
+
+  /** Regel von Hand anlegen und gleich auf offene Buchungen anwenden. */
+  async createRule(
+    personId: string,
+    householdId: string,
+    input: RuleInput,
+    asOf: IsoDate = todayUtc(),
+  ): Promise<{ rule: Rule; resuggested: number }> {
+    const criteria: RuleCriteria = {
+      accountId: input.accountId ?? null,
+      direction: input.direction ?? null,
+      counterpartyIban: input.counterpartyIban ?? null,
+      counterpartyName: input.counterpartyName?.replace(/\s+/g, ' ').trim() || null,
+      purposeContains: input.purposeContains?.replace(/\s+/g, ' ').trim() || null,
+      minAmountCents: input.minAmountCents ?? null,
+      maxAmountCents: input.maxAmountCents ?? null,
+    }
+    if (Object.values(criteria).every((v) => v === null)) {
+      throw new ApiError(422, 'regel_ohne_merkmal', 'Eine Regel braucht mindestens ein Merkmal.')
+    }
+    if (
+      criteria.minAmountCents !== null &&
+      criteria.maxAmountCents !== null &&
+      criteria.minAmountCents > criteria.maxAmountCents
+    ) {
+      throw new ApiError(422, 'regel_betrag', 'Der Mindestbetrag liegt über dem Höchstbetrag.')
+    }
+    return this.db.begin(async (tx) => {
+      await this.budget.householdAccess(tx, personId, householdId)
+      await this.checkTarget(tx, householdId, input)
+      if (criteria.accountId !== null) {
+        const [account] = await tx`
+          select 1 from accounts where id = ${criteria.accountId} and household_id = ${householdId}
+        `
+        if (!account) {
+          throw new ApiError(
+            422,
+            'konto_anderer_haushalt',
+            'Das Konto gehört nicht zu diesem Haushalt.',
+          )
+        }
+      }
+      // Konten zuerst sperren (Reihenfolge Konto → Haushalt), dann Regel anlegen.
+      await this.lockHouseholdAccounts(tx, householdId)
+      const open = await tx<{ id: string }[]>`
+        select t.id from transactions t join accounts a on a.id = t.account_id
+        where a.household_id = ${householdId} and t.status <> 'bestaetigt'
+      `
+      const rule = await this.upsertRule(
+        tx,
+        householdId,
+        personId,
+        criteria,
+        { kind: input.kind, potId: input.potId },
+        'manuell',
+      )
+      const resuggested = await this.applyRules(
+        tx,
+        open.map((o) => o.id),
+        asOf,
+      )
+      return { rule, resuggested }
+    })
+  }
+
+  async deleteRule(personId: string, ruleId: string): Promise<void> {
+    const [row] = await this.db`
+      delete from category_rules r
+      using household_members m
+      where r.id = ${ruleId} and m.household_id = r.household_id and m.person_id = ${personId}
+      returning r.id
+    `
+    if (!row) throw new ApiError(404, 'regel_nicht_gefunden', 'Diese Regel gibt es nicht.')
+  }
+
+  // --- Offene Buchungen --------------------------------------------------------
+
+  /** Buchungen, die auf Bestätigung warten, aus allen eigenen Haushalten (oder einem). */
+  async pendingTransactionIds(
+    personId: string,
+    filter: { householdId?: string | undefined; limit: number },
+  ): Promise<string[]> {
+    const rows = await this.db<{ id: string }[]>`
+      select t.id from transactions t
+      join accounts a on a.id = t.account_id
+      join household_members m on m.household_id = a.household_id and m.person_id = ${personId}
+      where t.status <> 'bestaetigt'
+        ${filter.householdId ? this.db`and a.household_id = ${filter.householdId}` : this.db``}
+      order by t.booking_date desc, t.created_at desc, t.id
+      limit ${filter.limit}
+    `
+    return rows.map((r) => r.id)
+  }
+}

@@ -1,5 +1,6 @@
 import { createApp } from '../../src/app.js'
 import { hashToken, newToken } from '../../src/auth/tokens.js'
+import type { LlmCategorizer } from '../../src/categorize/llm.js'
 import type { Config } from '../../src/config.js'
 import { createDb, type Db } from '../../src/db/client.js'
 import { TEST_DATABASE_URL } from './env.js'
@@ -16,9 +17,13 @@ export const testConfig: Config = {
   migrateOnStart: false,
 }
 
-export function setupTestApp() {
+export function setupTestApp(options: { llm?: LlmCategorizer } = {}) {
   const db: Db = createDb(TEST_DATABASE_URL)
-  const { app, auth, ledger } = createApp({ db, config: testConfig })
+  const { app, auth, budget, categorize, ledger } = createApp({
+    db,
+    config: testConfig,
+    llm: options.llm ?? null,
+  })
 
   const request = (method: string, path: string, body?: unknown, token?: string) =>
     app.request(path, {
@@ -44,5 +49,5 @@ export function setupTestApp() {
     return { person, token }
   }
 
-  return { db, app, auth, ledger, request, reset, personWithSession }
+  return { db, app, auth, budget, categorize, ledger, request, reset, personWithSession }
 }

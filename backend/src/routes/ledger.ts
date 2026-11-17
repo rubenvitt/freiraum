@@ -1,26 +1,9 @@
 import { createRoute, type OpenAPIHono, z } from '@hono/zod-openapi'
 import type { AppEnv } from '../app.js'
 import { requireAuth } from '../auth/middleware.js'
-import { isIsoDate } from '../ledger/dates.js'
 import { type Account, MAX_IMPORT_SIZE } from '../ledger/service.js'
-import { ErrorSchema } from '../schemas.js'
+import { Cents, error, IsoDate, json } from './common.js'
 
-const json = <T extends z.ZodType>(schema: T, description: string) => ({
-  content: { 'application/json': { schema } },
-  description,
-})
-const error = (description: string) => json(ErrorSchema, description)
-
-const IsoDate = z
-  .string()
-  .refine(isIsoDate, 'Datum als JJJJ-MM-TT erwartet')
-  .openapi({ format: 'date', example: '2026-11-03' })
-const Cents = z
-  .number()
-  .int()
-  .min(-100_000_000_000)
-  .max(100_000_000_000)
-  .openapi({ description: 'Betrag in Cent; negativ = Ausgang', example: -1299 })
 const Iban = z
   .string()
   .transform((s) => s.replace(/\s+/g, '').toUpperCase())
@@ -82,7 +65,32 @@ const ImportResultSchema = z
   })
   .openapi('ImportResult')
 
-const TransactionSchema = z
+export const SplitKind = z.enum(['topf', 'einnahme', 'umbuchung']).openapi({
+  description:
+    'topf = Ausgabe oder Erstattung eines Topfs; einnahme = fließt in „Noch ohne Aufgabe“; ' +
+    'umbuchung = zwischen eigenen Konten desselben Haushalts, ohne Wirkung aufs Budget',
+})
+
+export const SplitSchema = z
+  .object({
+    kind: SplitKind,
+    potId: z.uuid().nullable().openapi({ description: 'nur bei kind = topf' }),
+    amountCents: Cents,
+  })
+  .openapi('Split')
+
+export const SuggestionSchema = z
+  .object({
+    source: z.enum(['regel', 'llm']),
+    kind: SplitKind,
+    potId: z.uuid().nullable(),
+    confidencePct: z.number().int().min(0).max(100),
+    reason: z.string().openapi({ description: 'Begründung in einem Satz' }),
+    ruleId: z.uuid().nullable(),
+  })
+  .openapi('Suggestion')
+
+export const TransactionSchema = z
   .object({
     id: z.uuid(),
     accountId: z.uuid(),
@@ -94,8 +102,14 @@ const TransactionSchema = z
     counterpartyName: z.string().nullable(),
     counterpartyIban: z.string().nullable(),
     purpose: z.string().nullable(),
-    status: z.enum(['importiert', 'vorgeschlagen', 'bestaetigt']),
+    status: z.enum(['importiert', 'vorgeschlagen', 'bestaetigt']).openapi({
+      description:
+        'importiert = noch ohne Aufteilung; vorgeschlagen = Aufteilung aus Regel oder LLM, ' +
+        'zählt schon im Budget; bestaetigt = von einer Person bestätigt oder korrigiert',
+    }),
     recurringSeriesId: z.uuid().nullable(),
+    splits: z.array(SplitSchema),
+    suggestion: SuggestionSchema.nullable(),
   })
   .openapi('Transaction')
 

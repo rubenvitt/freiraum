@@ -45,8 +45,19 @@ describe('OpenAPI-Vertrag', () => {
       '/v1/auth/registration/options',
       '/v1/auth/registration/verify',
       '/v1/households',
+      '/v1/households/{householdId}/budget/{month}',
+      '/v1/households/{householdId}/budget/{month}/closing',
+      '/v1/households/{householdId}/budget/{month}/erst-ich',
+      '/v1/households/{householdId}/budget/{month}/pots/{potId}',
+      '/v1/households/{householdId}/pots',
+      '/v1/households/{householdId}/rules',
       '/v1/me',
+      '/v1/pots/{potId}',
       '/v1/recurring',
+      '/v1/rules/{ruleId}',
+      '/v1/transactions/pending',
+      '/v1/transactions/{transactionId}/confirm',
+      '/v1/transactions/{transactionId}/splits',
     ])
   })
 

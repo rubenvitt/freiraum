@@ -6,6 +6,8 @@
  * einmal ihre Existenz durchsickert.
  */
 import type { TransactionSql } from 'postgres'
+import { type Categorization, loadCategorizations } from '../categorize/service.js'
+import { cents } from '../db/cents.js'
 import type { Db } from '../db/client.js'
 import { ApiError } from '../errors.js'
 import { type IsoDate, todayUtc } from './dates.js'
@@ -47,6 +49,8 @@ export interface Transaction {
   purpose: string | null
   status: TransactionStatus
   recurringSeriesId: string | null
+  splits: Categorization['splits']
+  suggestion: Categorization['suggestion']
 }
 
 export interface RecurringSeries {
@@ -65,6 +69,17 @@ export interface RecurringSeries {
   state: 'aktiv' | 'beendet'
 }
 
+/**
+ * Was nach einem Import mit den neuen Buchungen geschieht (Kategorisierung, Erst-ich).
+ * `inTransaction` läuft in der Import-Transaktion, `afterCommit` danach (z. B. LLM-Aufrufe,
+ * die nicht in einer offenen Transaktion warten sollen). Gilt für jeden Import, auch den
+ * zeitgesteuerten Abruf beim Anbieter.
+ */
+export interface ImportHooks {
+  inTransaction?(tx: TransactionSql, transactionIds: string[], asOf: IsoDate): Promise<void>
+  afterCommit?(transactionIds: string[], asOf: IsoDate): Promise<void>
+}
+
 export interface ImportResult {
   importId: string
   received: number
@@ -80,13 +95,6 @@ const INSERT_CHUNK = 1_000
 
 const accountNotFound = () =>
   new ApiError(404, 'konto_nicht_gefunden', 'Dieses Konto gibt es nicht.')
-
-/** bigint kommt aus postgres.js als Text; Cent-Beträge passen sicher in eine JS-Zahl. */
-function cents(value: string | number): number {
-  const n = Number(value)
-  if (!Number.isSafeInteger(n)) throw new Error(`Betrag außerhalb des sicheren Bereichs: ${value}`)
-  return n
-}
 
 export function normalizeIban(value: string | undefined | null): string | null {
   const iban = (value ?? '').replace(/\s+/g, '').toUpperCase()
@@ -148,7 +156,10 @@ const toSeries = (r: SeriesRow): RecurringSeries => ({
 })
 
 export class LedgerService {
-  constructor(private readonly db: Db) {}
+  constructor(
+    private readonly db: Db,
+    private readonly hooks: ImportHooks = {},
+  ) {}
 
   // --- Haushalte ---------------------------------------------------------------
 
@@ -270,7 +281,7 @@ export class LedgerService {
         `Höchstens ${MAX_IMPORT_SIZE} Buchungen je Import, bitte aufteilen.`,
       )
     }
-    return this.db.begin(async (tx) => {
+    const { result, newIds } = await this.db.begin(async (tx) => {
       // Sperre je Konto: parallele Importe desselben Kontos laufen nacheinander.
       const account = await this.accessibleAccount(tx, personId, accountId, true)
       if (account.source === 'bar') {
@@ -280,8 +291,24 @@ export class LedgerService {
           'In ein Bargeldkonto wird nicht importiert, Barausgaben werden erfasst.',
         )
       }
-      return this.importLocked(tx, accountId, personId, transactions, asOf)
+      const imported = await this.importLocked(tx, accountId, personId, transactions, asOf)
+      if (imported.newIds.length > 0) {
+        await this.hooks.inTransaction?.(tx, imported.newIds, asOf)
+      }
+      return imported
     })
+    if (newIds.length > 0 && this.hooks.afterCommit) {
+      try {
+        await this.hooks.afterCommit(newIds, asOf)
+      } catch (err) {
+        // Der Import ist gespeichert; Vorschläge lassen sich später nachholen.
+        console.error(
+          'Nachlauf des Imports fehlgeschlagen',
+          err instanceof Error ? err.message : err,
+        )
+      }
+    }
+    return result
   }
 
   private async importLocked(
@@ -290,7 +317,7 @@ export class LedgerService {
     personId: string | null,
     transactions: IncomingTransaction[],
     asOf: IsoDate,
-  ): Promise<ImportResult> {
+  ): Promise<{ result: ImportResult; newIds: string[] }> {
     const received = transactions.length
     const [run] = await tx<{ id: string }[]>`
       insert into import_runs (account_id, person_id, received, imported, skipped)
@@ -313,21 +340,25 @@ export class LedgerService {
       import_run_id: run.id,
     }))
 
-    let imported = 0
+    const newIds: string[] = []
     for (let i = 0; i < rows.length; i += INSERT_CHUNK) {
-      const inserted = await tx`
+      const inserted = await tx<{ id: string }[]>`
         insert into transactions ${tx(rows.slice(i, i + INSERT_CHUNK))}
         on conflict (account_id, import_key) do nothing
         returning id
       `
-      imported += inserted.length
+      newIds.push(...inserted.map((r) => r.id))
     }
+    const imported = newIds.length
     await tx`
       update import_runs set imported = ${imported}, skipped = ${received - imported}
       where id = ${run.id}
     `
     const recurring = await this.refreshRecurring(tx, accountId, asOf)
-    return { importId: run.id, received, imported, skipped: received - imported, recurring }
+    return {
+      result: { importId: run.id, received, imported, skipped: received - imported, recurring },
+      newIds,
+    }
   }
 
   // --- Buchungen ---------------------------------------------------------------
@@ -338,6 +369,23 @@ export class LedgerService {
     filter: { from?: IsoDate | undefined; to?: IsoDate | undefined; limit: number },
   ): Promise<Transaction[]> {
     await this.accessibleAccount(this.db, personId, accountId)
+    const ids = await this.db<{ id: string }[]>`
+      select id from transactions
+      where account_id = ${accountId}
+        ${filter.from ? this.db`and booking_date >= ${filter.from}` : this.db``}
+        ${filter.to ? this.db`and booking_date <= ${filter.to}` : this.db``}
+      order by booking_date desc, created_at desc, id
+      limit ${filter.limit}
+    `
+    return this.transactionsByIds(ids.map((r) => r.id))
+  }
+
+  /**
+   * Buchungen samt Aufteilung und Vorschlag, in der Reihenfolge der IDs. Prüft keinen Zugriff:
+   * Die IDs müssen aus einer Abfrage stammen, die das schon getan hat.
+   */
+  async transactionsByIds(ids: string[]): Promise<Transaction[]> {
+    if (ids.length === 0) return []
     const rows = await this.db<
       {
         id: string
@@ -357,26 +405,32 @@ export class LedgerService {
       select id, account_id, source_id, booking_date::text, value_date::text, amount_cents,
              currency, counterparty_name, counterparty_iban, purpose, status, recurring_series_id
       from transactions
-      where account_id = ${accountId}
-        ${filter.from ? this.db`and booking_date >= ${filter.from}` : this.db``}
-        ${filter.to ? this.db`and booking_date <= ${filter.to}` : this.db``}
-      order by booking_date desc, created_at desc, id
-      limit ${filter.limit}
+      where id = any(${ids}::uuid[])
     `
-    return rows.map((r) => ({
-      id: r.id,
-      accountId: r.account_id,
-      sourceId: r.source_id,
-      bookingDate: r.booking_date,
-      valueDate: r.value_date,
-      amountCents: cents(r.amount_cents),
-      currency: r.currency,
-      counterpartyName: r.counterparty_name,
-      counterpartyIban: r.counterparty_iban,
-      purpose: r.purpose,
-      status: r.status,
-      recurringSeriesId: r.recurring_series_id,
-    }))
+    const byId = new Map(rows.map((r) => [r.id, r]))
+    const categorizations = await loadCategorizations(this.db, ids)
+    return ids.flatMap((id) => {
+      const r = byId.get(id)
+      if (!r) return []
+      return [
+        {
+          id: r.id,
+          accountId: r.account_id,
+          sourceId: r.source_id,
+          bookingDate: r.booking_date,
+          valueDate: r.value_date,
+          amountCents: cents(r.amount_cents),
+          currency: r.currency,
+          counterpartyName: r.counterparty_name,
+          counterpartyIban: r.counterparty_iban,
+          purpose: r.purpose,
+          status: r.status,
+          recurringSeriesId: r.recurring_series_id,
+          splits: categorizations.get(r.id)?.splits ?? [],
+          suggestion: categorizations.get(r.id)?.suggestion ?? null,
+        },
+      ]
+    })
   }
 
   // --- Wiederkehrende Serien ---------------------------------------------------

@@ -62,3 +62,26 @@ Den vollständigen Vertrag beschreibt [`openapi/openapi.yaml`](../openapi/openap
 - Nach jedem Import werden die **wiederkehrenden Buchungen** des Kontos neu erkannt
   (`GET /v1/recurring`): Rhythmus wöchentlich bis jährlich, typischer Betrag (Median), nächste
   erwartete Buchung, `beendet`, wenn sie deutlich überfällig ist.
+
+## Budget und Kategorisierung (E2)
+
+Rechenregeln und Begründungen: [ADR 0003](../docs/adr/0003-budget-kern.md).
+
+- **Töpfe** je Haushalt (`/v1/households/{id}/pots`): `monatlich`, `ruecklage` (Jahresbetrag),
+  `ziel` (Zielbetrag, optional Zielmonat), `erst_ich` (fester Monatsbetrag oder Anteil der
+  Einnahmen). Archivieren nur, wenn der Topf leer ist.
+- **Budget eines Monats** (`GET /v1/households/{id}/budget/{JJJJ-MM}`): „Noch ohne Aufgabe“,
+  Einnahmen, Überziehung aus dem Vormonat und je Topf Übertrag, Zuweisung, Aufteilungen,
+  Verfügbar, Plan und noch Fehlendes.
+- **Zuweisen** (`PUT …/budget/{Monat}/pots/{potId}`): Erhöhen nur, solange „Noch ohne Aufgabe“
+  nicht negativ wird; Senken immer.
+- **Erst ich** füllt sich nach jeder neuen Einnahme von selbst (in Reihenfolge der Töpfe, soweit
+  Geld da ist). Eine eigene Zuweisung schaltet die Automatik für Topf und Monat ab.
+- **Monatsabschluss** (`POST …/budget/{Monat}/closing`): nur vergangene Monate, der Reihe nach,
+  alle Buchungen bestätigt. Danach keine Zuweisungen mehr in diesem Monat.
+- **Kategorisierung:** Regeln greifen beim Import, ohne Treffer fragt ein LLM (falls angebunden).
+  Vorschläge zählen sofort im Budget (`vorgeschlagen`). `GET /v1/transactions/pending` listet,
+  was auf Bestätigung wartet; `POST /v1/transactions/{id}/confirm` bestätigt mit einem Tipp,
+  `PUT /v1/transactions/{id}/splits` korrigiert oder teilt auf. Eine Korrektur wird zur Regel
+  (`/v1/households/{id}/rules`) und schlägt offene Buchungen neu vor.
+- Ein LLM ist noch nicht angebunden (`src/categorize/llm.ts` ist die Schnittstelle).
