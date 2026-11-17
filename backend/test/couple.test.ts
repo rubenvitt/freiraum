@@ -616,14 +616,16 @@ describe('Freigaben und Kennzahlen', () => {
     expect(await body(await metrics(a.token, a.id))).toEqual({
       personId: a.id,
       month: current,
-      scopes: ['erst_ich', 'ruecklagen', 'einzahlung_soll', 'budget'],
+      scopes: ['erst_ich', 'ruecklagen', 'einzahlung_soll', 'budget', 'sparquote'],
       erstIch: { hasPots: true, fulfilled: true, fundedPct: 100 },
       ruecklagen: { hasPots: true, fulfilled: false, fundedPct: 0 },
+      sparquote: { savingsRatePct: 100 },
     })
     expect(await body(await metrics(b.token, a.id))).toMatchObject({
       scopes: [],
       erstIch: null,
       ruecklagen: null,
+      sparquote: null,
     })
 
     const grant = await request('PUT', `/v1/shares/${b.id}/erst_ich`, undefined, a.token)
@@ -642,6 +644,7 @@ describe('Freigaben und Kennzahlen', () => {
       scopes: ['erst_ich'],
       erstIch: { hasPots: true, fulfilled: true, fundedPct: 100 },
       ruecklagen: null,
+      sparquote: null,
     })
     expect(JSON.stringify(shared)).not.toMatch(/Cents/)
 
@@ -656,6 +659,52 @@ describe('Freigaben und Kennzahlen', () => {
       (await request('DELETE', `/v1/shares/${b.id}/erst_ich`, undefined, a.token)).status,
     ).toBe(204)
     expect((await body(await metrics(b.token, a.id))).erstIch).toBeNull()
+  })
+
+  it('zeigt die Sparquote nur mit Freigabe, als Prozentwert ohne Beträge', async () => {
+    const { a, b } = await couple()
+    await salary(a, 300_000)
+    const food = await pot(a.token, a.householdId, { name: 'Lebensmittel', kind: 'monatlich' })
+    await importInto(a.token, a.accountId, [
+      {
+        bookingDate: day(2),
+        amountCents: -100_000,
+        counterpartyName: 'Gemeinschaftskonto',
+        counterpartyIban: IBAN_SHARED,
+        purpose: 'Haushaltsgeld',
+      },
+      { bookingDate: day(3), amountCents: -50_000, counterpartyName: 'Supermarkt Beispiel' },
+    ])
+    const shopping = (await transactions(a.token, a.accountId)).find(
+      (t) => t.amountCents === -50_000,
+    )!
+    await setSplits(a.token, shopping.id, [{ kind: 'topf', potId: food, amountCents: -50_000 }])
+    const metrics = (token: string, m = current) =>
+      request('GET', `/v1/persons/${a.id}/metrics/${m}`, undefined, token)
+
+    // (300 000 − 100 000 Einzahlung − 50 000 Konsum) ÷ 300 000
+    expect((await body(await metrics(a.token))).sparquote).toEqual({ savingsRatePct: 50 })
+    // Ohne Einkommen gibt es keine Quote.
+    expect((await body(await metrics(a.token, next))).sparquote).toEqual({ savingsRatePct: null })
+
+    expect((await body(await metrics(b.token))).sparquote).toBeNull()
+    await request('PUT', `/v1/shares/${b.id}/erst_ich`, undefined, a.token)
+    expect((await body(await metrics(b.token))).sparquote).toBeNull()
+
+    expect((await request('PUT', `/v1/shares/${b.id}/sparquote`, undefined, a.token)).status).toBe(
+      200,
+    )
+    const shared = await body(await metrics(b.token))
+    expect(shared).toMatchObject({
+      scopes: ['erst_ich', 'sparquote'],
+      sparquote: { savingsRatePct: 50 },
+    })
+    expect(JSON.stringify(shared)).not.toMatch(/Cents/)
+
+    expect(
+      (await request('DELETE', `/v1/shares/${b.id}/sparquote`, undefined, a.token)).status,
+    ).toBe(204)
+    expect((await body(await metrics(b.token))).sparquote).toBeNull()
   })
 
   it('gibt nur an die Person mit gemeinsamem Haushalt frei', async () => {

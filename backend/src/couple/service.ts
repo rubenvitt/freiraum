@@ -5,14 +5,15 @@
  * - Aus dem privaten Haushalt der anderen Person kommt nur, was sie freigegeben hat
  *   (`shares`). Freigaben gelten nur zwischen Personen mit gemeinsamem Haushalt und werden bei
  *   jeder Anfrage neu geprüft; Zurücknehmen wirkt sofort.
- * - Kennzahlen sind Anteile und Ja/Nein, keine Beträge: Aus „Erst ich erledigt“ lässt sich
- *   kein Einkommen zurückrechnen.
+ * - Kennzahlen sind Anteile und Ja/Nein, keine Beträge: Aus „Erst ich erledigt“ oder der
+ *   Sparquote lässt sich kein Einkommen zurückrechnen.
  * - Das Soll einer Einzahlungsregel „Prozent vom Netto“ verrät das Einkommen. Die andere Person
  *   sieht es nur mit der Freigabe `einzahlung_soll`; ein fester Betrag ist ohnehin bekannt.
  * - Wer eine private Buchung einem gemeinsamen Topf zuordnet, macht sie fürs Gemeinsame
  *   sichtbar, aber nur Datum, Gegenpartei und den gemeinsamen Anteil, nicht Konto oder Zweck.
  */
 import type { TransactionSql } from 'postgres'
+import type { AnalyticsService } from '../analytics/service.js'
 import { computeMonth, type PotKind } from '../budget/compute.js'
 import { firstDay, type Month } from '../budget/months.js'
 import type { BudgetService } from '../budget/service.js'
@@ -24,7 +25,13 @@ import { openClaims } from './settle.js'
 
 type Sql = Db | TransactionSql
 
-export const SHARE_SCOPES = ['erst_ich', 'ruecklagen', 'einzahlung_soll', 'budget'] as const
+export const SHARE_SCOPES = [
+  'erst_ich',
+  'ruecklagen',
+  'einzahlung_soll',
+  'budget',
+  'sparquote',
+] as const
 export type ShareScope = (typeof SHARE_SCOPES)[number]
 
 export interface ShareEntry {
@@ -48,12 +55,19 @@ export interface PotProgress {
   fundedPct: number | null
 }
 
+/** Sparquote im Monat (ADR 0005): Anteil statt Betrag. */
+export interface SavingsRate {
+  /** Gespart ÷ Einkommen in Prozent (abgerundet, kann negativ sein); null ohne Einkommen */
+  savingsRatePct: number | null
+}
+
 export interface Metrics {
   personId: string
   month: Month
   scopes: ShareScope[]
   erstIch: PotProgress | null
   ruecklagen: PotProgress | null
+  sparquote: SavingsRate | null
 }
 
 export interface ContributionRule {
@@ -166,6 +180,7 @@ export class CoupleService {
   constructor(
     private readonly db: Db,
     private readonly budget: BudgetService,
+    private readonly analytics: AnalyticsService,
   ) {}
 
   // --- Zugriff -----------------------------------------------------------------
@@ -338,12 +353,21 @@ export class CoupleService {
       if (scopes.has('erst_ich')) erstIch = progress('erst_ich')
       if (scopes.has('ruecklagen')) ruecklagen = progress('ruecklage')
     }
+    let sparquote: SavingsRate | null = null
+    if (scopes.has('sparquote')) {
+      const m = await this.analytics.monthMetricsUnchecked(household.id, month)
+      sparquote = {
+        // Abgerundet wie die übrigen Anteile; nur der Prozentwert verlässt den Server.
+        savingsRatePct: m.incomeCents > 0 ? Math.floor((100 * m.savedCents) / m.incomeCents) : null,
+      }
+    }
     return {
       personId,
       month,
       scopes: SHARE_SCOPES.filter((s) => scopes.has(s)),
       erstIch,
       ruecklagen,
+      sparquote,
     }
   }
 

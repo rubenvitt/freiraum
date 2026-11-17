@@ -62,8 +62,8 @@ export function createApp(deps: { db: Db; config: Config; llm?: LlmCategorizer |
   }
   const budget = new BudgetService(deps.db, suggest)
   const categorize = new CategorizationService(deps.db, budget, llm)
-  const couple = new CoupleService(deps.db, budget)
   const analytics = new AnalyticsService(deps.db, budget)
+  const couple = new CoupleService(deps.db, budget, analytics)
   const ledger = new LedgerService(deps.db, suggest)
 
   const app = new OpenAPIHono<AppEnv>({

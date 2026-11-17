@@ -19,7 +19,8 @@ const ShareScope = z.enum(SHARE_SCOPES).openapi({
     'erst_ich = ob die Erst-ich-Töpfe des Monats gefüllt sind (Anteil, kein Betrag); ' +
     'ruecklagen = ob die Rücklagen ihre Monatsrate haben (Anteil); einzahlung_soll = Soll der ' +
     'eigenen Einzahlungsregel „Prozent vom Netto“ (verrät sonst das Einkommen); budget = Budget ' +
-    'und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern)',
+    'und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern); sparquote = ' +
+    'Sparquote des Monats als Prozentwert (ohne Beträge)',
 })
 
 const ShareSchema = z
@@ -49,6 +50,20 @@ const PotProgressSchema = z
   })
   .openapi('PotProgress')
 
+const SavingsRateSchema = z
+  .object({
+    savingsRatePct: z
+      .number()
+      .int()
+      .nullable()
+      .openapi({
+        description:
+          'Sparquote: (Einkommen − Konsum − Einzahlungen ins Gemeinsame) ÷ Einkommen in Prozent, ' +
+          'abgerundet, kann negativ sein; null ohne Einkommen im Monat',
+      }),
+  })
+  .openapi('SavingsRate')
+
 const MetricsSchema = z
   .object({
     personId: z.uuid(),
@@ -56,6 +71,7 @@ const MetricsSchema = z
     scopes: z.array(ShareScope).openapi({ description: 'sichtbare Kennzahlen' }),
     erstIch: PotProgressSchema.nullable(),
     ruecklagen: PotProgressSchema.nullable(),
+    sparquote: SavingsRateSchema.nullable(),
   })
   .openapi('Metrics')
 

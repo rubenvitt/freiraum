@@ -78,11 +78,13 @@ Buchungen von Hand zu (oder legt eine Regel an, die sie neu vorschlägt).
 | `ruecklagen` | dasselbe für die Rücklagen |
 | `einzahlung_soll` | das Soll der eigenen Regel „Prozent vom Netto“ |
 | `budget` | Budget und Töpfe des privaten Haushalts lesen |
+| `sparquote` | die Sparquote des Monats als ganzer Prozentwert (ADR 0005), null ohne Einkommen |
 
 - Freigaben gibt es nur an die Person, mit der man einen Haushalt teilt. Geprüft wird bei jeder
   Anfrage; Zurücknehmen wirkt sofort.
-- **Kennzahlen sind Anteile, keine Beträge.** Aus „Erst ich zu 100 % erledigt“ lässt sich kein
-  Einkommen zurückrechnen.
+- **Kennzahlen sind Anteile, keine Beträge.** Aus „Erst ich zu 100 % erledigt“ oder einer
+  Sparquote von 30 % lässt sich kein Einkommen zurückrechnen. Die Sparquote kommt deshalb auf ganze
+  Prozent abgerundet, nicht in Basispunkten.
 - Das Soll einer Regel „Prozent vom Netto“ verrät das Einkommen. Ohne `einzahlung_soll` sieht die
   andere Person nur Regel und Ist. Ein fester Betrag ist ohnehin bekannt und immer sichtbar.
 - `budget` öffnet nur das **Lesen** von Budget und Töpfen. Buchungen, Konten, Regeln und jede
@@ -96,8 +98,8 @@ Buchungen von Hand zu (oder legt eine Regel an, die sie neu vorschlägt).
 - Budgetbeginn (ADR 0003): Einzahlungen vor dem Startmonat zählen nicht im Budget, und vorher gibt
   es auch keinen Abgleich (wie bei allen Vorschlägen). Soll/Ist der Einzahlungen und der Ausgleich
   sind Forderungen zwischen den Personen und rechnen unabhängig davon.
-- Die Sparquote ist seit E5 definiert ([ADR 0005](0005-auswertungen.md)), als Freigabe aber noch
-  nicht ergänzt.
+- Die Sparquote ([ADR 0005](0005-auswertungen.md)) ist seit FREI-19 als Freigabe `sparquote`
+  ergänzt (Migration 0007). Einzahlungen ins Gemeinsame mindern die private Sparquote.
 - Ausgaben vom gemeinsamen Konto für einen privaten Topf (umgekehrter Ausgleich) und das Verrechnen
   eines Ausgleichs mit der nächsten Einzahlung sind nicht umgesetzt.
 - Das LLM bekommt weiterhin nur die Töpfe des Haushalts, zu dem das Konto gehört, also keine
