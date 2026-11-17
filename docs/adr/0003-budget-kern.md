@@ -121,6 +121,30 @@ Abgeschlossene Monate rührt sie nicht an.
   Buchungen des Haushalts neu vorgeschlagen. Ohne Gegenpartei (z. B. Depotbank ohne Angaben)
   entsteht keine Regel; Aufteilungen auf mehrere Töpfe lernen nichts.
 
+### Budgetbeginn und Anfangsbestand (FREI-13)
+
+- Jeder Haushalt hat einen **Startmonat** (`households.budget_start_month`). Neue Haushalte
+  starten im laufenden Monat. Davor zählt nichts im Budget: keine Einnahmen, keine Ausgaben,
+  keine Zuweisungen, keine Überziehung. Import, Serienerkennung und spätere Auswertungen behalten
+  die Buchungen. Monate vor dem Start sind im Budget leer.
+- Der **Anfangsbestand** ist die Summe der Kontostände des Haushalts zu Beginn des Startmonats.
+  Er wird nicht gespeichert, sondern aus einem **bekannten Kontostand** je Konto abgeleitet (Stand
+  am Ende eines Stichtags, von Hand oder vom Anbieter): Stand − Buchungen ab Monatsbeginn bis zum
+  Stichtag (+ Buchungen zwischen Stichtag und Start, falls der Stichtag davor liegt). Banken
+  liefern den heutigen Saldo, nicht den zum Start; so bleibt der Wert richtig, wenn der Start
+  verschoben wird oder später ältere Buchungen nachkommen. Konten ohne Kontostand zählen mit 0
+  und sind in `GET …/budget-start` erkennbar.
+- Der Anfangsbestand fließt im Startmonat in „Noch ohne Aufgabe“, ist aber **keine Einnahme des
+  Monats**: Erst-ich-Töpfe mit Anteil rechnen nur mit echten Einnahmen. Feste Erst-ich-Beträge
+  dürfen ihn nutzen.
+- Erst-ich-Automatik, Zuweisungen und Monatsabschluss gelten erst ab dem Startmonat; der
+  Abschluss „der Reihe nach“ beginnt dort. Regeln und LLM schlagen nur für Buchungen ab dem
+  Start vor, `pending` listet nur diese.
+- Den Start **verschieben** geht nur, solange kein Monat abgeschlossen ist und vor dem neuen Start
+  keine eigene Zuweisung ≠ 0 liegt; Automatik- und 0-Zuweisungen davor werden entfernt. Rückt der
+  Start nach vorn, bekommen die hinzukommenden Buchungen Vorschläge wie beim Import. Nach jeder
+  Änderung von Start oder Kontostand läuft Erst-ich für alle offenen Monate ab dem Start bis heute.
+
 ### Haushaltsgrenzen
 
 Töpfe kommen immer aus dem Haushalt des Kontos. Eine private Ausgabe für einen gemeinsamen Topf
@@ -128,10 +152,12 @@ Töpfe kommen immer aus dem Haushalt des Kontos. Eine private Ausgabe für einen
 
 ## Folgen
 
-- Es fehlt ein **Budgetbeginn**: Wer die volle Historie importiert, bekommt alle alten Einnahmen
-  in „Noch ohne Aufgabe“, und die Automatik füllt alte Monate. Vor dem echten Einsatz braucht
-  jeder Haushalt einen Startmonat mit Anfangsbestand (Folgeaufgabe, hängt an den Kontoständen
-  aus FREI-12).
+- **Budgetbeginn** (FREI-13): Eine volle Historie ändert „Noch ohne Aufgabe“ nur ab dem
+  Startmonat. Der Abruf beim Anbieter (FREI-12) speichert den Saldo mit
+  `BudgetService.recordBalance(…, 'anbieter')`; bis dahin wird der Kontostand von Hand erfasst.
+- Der Anfangsbestand hängt an vollständigen Buchungen zwischen Start und Stichtag. Fehlen dort
+  Umsätze (Lücke im Import), ist er um genau diese Summe falsch; ein Stichtag nahe am Start hält
+  das klein.
 - LLM-Vorschläge erscheinen nach dem Import mit etwas Verzögerung (Sekunden bis Minuten bei
   großen Importen). Wer direkt nach dem Import die offenen Buchungen abruft, sieht einen Teil
   noch ohne Vorschlag. Die Warteschlange lebt im Prozess: Ein Neustart verliert sie, das

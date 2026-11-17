@@ -147,6 +147,8 @@ interface TxRow {
   counterparty_iban: string | null
   purpose: string | null
   status: 'importiert' | 'vorgeschlagen' | 'bestaetigt'
+  /** Buchungstag ab dem Budgetbeginn des Haushalts (nur aus `loadTransactions`). */
+  in_budget?: boolean
 }
 
 const toMatchable = (t: TxRow): MatchableTransaction => ({
@@ -196,8 +198,11 @@ export class CategorizationService {
     if (ids.length === 0) return []
     return sql<TxRow[]>`
       select t.id, t.account_id, a.household_id, t.booking_date::text, t.amount_cents,
-             t.counterparty_name, t.counterparty_iban, t.purpose, t.status
-      from transactions t join accounts a on a.id = t.account_id
+             t.counterparty_name, t.counterparty_iban, t.purpose, t.status,
+             t.booking_date >= h.budget_start_month as in_budget
+      from transactions t
+      join accounts a on a.id = t.account_id
+      join households h on h.id = a.household_id
       where t.id = any(${ids}::uuid[])
     `
   }
@@ -307,8 +312,9 @@ export class CategorizationService {
    * oder nicht nötig, weil die Buchungen frisch sind).
    */
   async applyRules(tx: TransactionSql, transactionIds: string[], asOf: IsoDate): Promise<number> {
+    // Vor dem Budgetbeginn braucht es keine Vorschläge.
     const rows = (await this.loadTransactions(tx, transactionIds)).filter(
-      (t) => t.status !== 'bestaetigt',
+      (t) => t.status !== 'bestaetigt' && t.in_budget === true,
     )
     const rulesByHousehold = new Map<string, Rule[]>()
     const touched: TxRow[] = []
@@ -408,11 +414,16 @@ export class CategorizationService {
   ): Promise<number> {
     if (!this.llm) return Promise.resolve(0)
     return this.exclusive(async () => {
+      // Buchungen vor dem Budgetbeginn fragt runLlm nicht; hier gar nicht erst auswählen,
+      // sonst belegen sie dauerhaft die Plätze eines Durchgangs.
       const rows = await this.db<{ id: string }[]>`
-        select id from transactions
-        where status = 'importiert' and llm_checked_at is null
-          and created_at > now() - make_interval(days => ${options.withinDays ?? 7})
-        order by created_at, id
+        select t.id from transactions t
+        join accounts a on a.id = t.account_id
+        join households h on h.id = a.household_id
+        where t.status = 'importiert' and t.llm_checked_at is null
+          and t.booking_date >= h.budget_start_month
+          and t.created_at > now() - make_interval(days => ${options.withinDays ?? 7})
+        order by t.created_at, t.id
         limit ${options.limit ?? LLM_RETRY_LIMIT}
       `
       return this.runLlm(
@@ -439,9 +450,12 @@ export class CategorizationService {
     const pending = await this.db<TxRow[]>`
       select t.id, t.account_id, a.household_id, t.booking_date::text, t.amount_cents,
              t.counterparty_name, t.counterparty_iban, t.purpose, t.status
-      from transactions t join accounts a on a.id = t.account_id
+      from transactions t
+      join accounts a on a.id = t.account_id
+      join households h on h.id = a.household_id
       where t.id = any(${transactionIds}::uuid[])
         and t.status = 'importiert' and t.llm_checked_at is null
+        and t.booking_date >= h.budget_start_month
       order by a.household_id, t.booking_date, t.id
     `
     // Stapel je Haushalt: Optionen (Töpfe) gelten nur für diesen Haushalt.
@@ -816,8 +830,9 @@ export class CategorizationService {
     const rows = await this.db<{ id: string }[]>`
       select t.id from transactions t
       join accounts a on a.id = t.account_id
+      join households h on h.id = a.household_id
       join household_members m on m.household_id = a.household_id and m.person_id = ${personId}
-      where t.status <> 'bestaetigt'
+      where t.status <> 'bestaetigt' and t.booking_date >= h.budget_start_month
         ${filter.householdId ? this.db`and a.household_id = ${filter.householdId}` : this.db``}
       order by t.booking_date desc, t.created_at desc, t.id
       limit ${filter.limit}

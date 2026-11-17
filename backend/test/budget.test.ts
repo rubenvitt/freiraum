@@ -65,6 +65,17 @@ const salaryRule = (token: string, householdId: string) =>
     token,
   )
 
+/** Budgetbeginn setzen (Abschlüsse laufen ab dem Startmonat der Reihe nach). */
+async function startAt(token: string, householdId: string, m: string) {
+  const res = await request(
+    'PUT',
+    `/v1/households/${householdId}/budget-start`,
+    { month: m },
+    token,
+  )
+  expect(res.status).toBe(200)
+}
+
 const importInto = (token: string, accountId: string, transactions: Json[]) =>
   request('POST', `/v1/accounts/${accountId}/imports`, { transactions }, token)
 
@@ -341,6 +352,7 @@ describe('Erst-ich-Automatik', () => {
 describe('Monatsabschluss', () => {
   it('schließt vergangene Monate der Reihe nach ab und sperrt sie', async () => {
     const a = await setup()
+    await startAt(a.token, a.householdId, beforePrevious)
     await salaryRule(a.token, a.householdId)
     const essen = await potId(a.token, a.householdId, { name: 'Essen', kind: 'monatlich' })
     await importInto(a.token, a.accountId, [salary(beforePrevious), salary(previous)])
@@ -392,6 +404,7 @@ describe('Monatsabschluss', () => {
 
   it('schließt nicht ab, solange Buchungen auf Bestätigung warten', async () => {
     const a = await setup()
+    await startAt(a.token, a.householdId, previous)
     await importInto(a.token, a.accountId, [
       { bookingDate: `${previous}-05`, amountCents: -1_000, purpose: 'Unklar' },
     ])

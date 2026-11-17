@@ -571,6 +571,28 @@ describe('LLM-Vorschläge', () => {
     expect(sizes).toEqual([1, 2])
   })
 
+  it('holt nur Buchungen ab dem Budgetbeginn nach', async () => {
+    const a = await setup()
+    await db`update households set budget_start_month = '2026-11-01' where id = ${a.householdId}`
+    llmAnswer = () => {
+      throw new Error('HTTP 503')
+    }
+    // Ältere Buchungen zuerst importiert, also vorne beim Nachholen, wenn nichts filtert.
+    await importInto(
+      a.token,
+      a.accountId,
+      Array.from({ length: 5 }, (_, i) => grocery(`2026-10-${10 + i}`)),
+    )
+    await importInto(a.token, a.accountId, [grocery('2026-11-02')])
+    await categorize.llmIdle()
+    expect(llmCalls.map((c) => c.transactions.length)).toEqual([1])
+    llmCalls.length = 0
+    llmAnswer = () => null
+    // Die Oktober-Buchungen belegen keinen Platz im Durchgang.
+    await categorize.retryLlmSuggestions({ limit: 1 })
+    expect(llmCalls.map((c) => c.transactions.map((t) => t.bookingDate))).toEqual([['2026-11-02']])
+  })
+
   it('ignoriert ungültige Antworten und fragt nicht zweimal', async () => {
     const a = await setup()
     await pot(a.token, a.householdId, 'Lebensmittel')

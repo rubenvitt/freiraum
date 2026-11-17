@@ -76,6 +76,11 @@ Den vollständigen Vertrag beschreibt [`openapi/openapi.yaml`](../openapi/openap
 
 Rechenregeln und Begründungen: [ADR 0003](../docs/adr/0003-budget-kern.md).
 
+- **Budgetbeginn** je Haushalt (`GET`/`PUT /v1/households/{id}/budget-start`): Buchungen vor
+  dem Startmonat zählen nicht im Budget und bekommen keine Vorschläge (Import und Serien behalten
+  sie). Neue Haushalte starten im laufenden Monat. Der **Anfangsbestand** im Startmonat ergibt
+  sich aus den Kontoständen (`PUT /v1/accounts/{id}/balance`, Stand am Ende eines Tages) minus
+  den Buchungen ab Startmonat bis zum Stichtag und fließt in „Noch ohne Aufgabe“.
 - **Töpfe** je Haushalt (`/v1/households/{id}/pots`): `monatlich`, `ruecklage` (Jahresbetrag),
   `ziel` (Zielbetrag, optional Zielmonat), `erst_ich` (fester Monatsbetrag oder Anteil der
   Einnahmen). Archivieren nur, wenn der Topf leer ist.
