@@ -104,7 +104,10 @@ private let pots: [String: [Pot]] = [
                           amountCents: 6_000, openCents: 4_000)],
         openDebts: [.init(transactionId: "t2", personId: "pa", bookingDate: "2026-11-16", counterpartyName: nil,
                           amountCents: 2_500, openCents: 2_500)],
-        manual: [.init(id: "m1", personId: "pb", amountCents: 2_000, settledOn: "2026-11-10", note: "bar")]
+        manual: [
+            .init(id: "m1", personId: "pb", amountCents: 2_000, settledOn: "2026-11-10", note: "bar"),
+            .init(id: "m2", personId: "pa", kind: .verrechnung, amountCents: -1_000, settledOn: "2026-11-12"),
+        ]
     )
 
     @Test func werWemWieVielSchuldet() {
@@ -128,6 +131,10 @@ private let pots: [String: [Pot]] = [
         #expect(state.debts.first?.subtitle == "Gestern · Du")
         #expect(state.debts.first?.ofTotal == nil)
         #expect(state.manual.first?.title == "bar")
+        #expect(state.manual.first?.subtitle == "Di, 10. Nov · Person B · Erstattung erhalten")
+        #expect(state.manual.last?.title == "Rückzahlung mit Einzahlung verrechnet")
+        #expect(state.manual.last?.subtitle == "Do, 12. Nov · Du")
+        #expect(state.manual.last?.amount == "10,00\u{00A0}€")
     }
 
     @Test func ausgeglichen() {
@@ -228,6 +235,7 @@ private let pots: [String: [Pot]] = [
         #expect(s.balances.first?.openCents == -2_500)
         #expect(s.openDebts.first?.counterpartyName == "Laden")
         #expect(s.manual.first?.note == nil)
+        #expect(s.manual.first?.kind == .zahlung)
     }
 }
 

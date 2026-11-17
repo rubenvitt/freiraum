@@ -133,7 +133,7 @@ extension Transaction {
 }
 
 extension Settlements {
-    init(_ s: Components.Schemas.Settlements) {
+    init(_ s: Components.Schemas.Settlements) throws {
         self.init(
             householdId: s.householdId,
             balances: s.balances.map {
@@ -155,8 +155,11 @@ extension Settlements {
                     counterpartyName: $0.counterpartyName, amountCents: $0.amountCents, openCents: $0.openCents
                 )
             },
-            manual: s.manual.map {
-                Manual(id: $0.id, personId: $0.personId, amountCents: $0.amountCents, settledOn: $0.settledOn, note: $0.note)
+            manual: try s.manual.map {
+                Manual(
+                    id: $0.id, personId: $0.personId, kind: try apiEnum($0.kind.rawValue), amountCents: $0.amountCents,
+                    settledOn: $0.settledOn, note: $0.note
+                )
             }
         )
     }

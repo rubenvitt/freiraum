@@ -264,7 +264,7 @@ public final class FreiraumService: Sendable {
         try await call {
             let out = try await client.getV1HouseholdsHouseholdIdSettlements(path: .init(householdId: householdId))
             guard case let .ok(ok) = out else { throw unexpected(out) }
-            return Settlements(try ok.body.json)
+            return try Settlements(try ok.body.json)
         }
     }
 

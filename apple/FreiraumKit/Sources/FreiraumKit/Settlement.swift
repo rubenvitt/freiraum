@@ -57,17 +57,23 @@ public struct Settlements: Hashable, Sendable, Codable {
         }
     }
 
-    /// Von Hand verbuchter Ausgleich (z. B. bar erhalten).
+    /// Von Hand verbuchter Ausgleich: Geld außerhalb der Konten (z. B. bar) oder mit der
+    /// Einzahlung verrechnet (FREI-28).
     public struct Manual: Hashable, Sendable, Codable, Identifiable {
+        public enum Kind: String, Hashable, Sendable, Codable { case zahlung, verrechnung }
+
         public let id: String
         public let personId: String
+        public let kind: Kind
+        /// positiv = das Gemeinsame erstattet der Person; negativ = die Person zahlt zurück (nur bei Verrechnung)
         public let amountCents: Int
         public let settledOn: String
         public let note: String?
 
-        public init(id: String, personId: String, amountCents: Int, settledOn: String, note: String? = nil) {
+        public init(id: String, personId: String, kind: Kind = .zahlung, amountCents: Int, settledOn: String, note: String? = nil) {
             self.id = id
             self.personId = personId
+            self.kind = kind
             self.amountCents = amountCents
             self.settledOn = settledOn
             self.note = note
@@ -183,11 +189,19 @@ public struct SettlementState: Hashable, Sendable {
         claims = s.openItems.map(item)
         debts = s.openDebts.map(item)
         manual = s.manual.map { m in
-            ManualRow(
+            let what: String
+            switch (m.kind, m.amountCents < 0) {
+            case (.zahlung, _): what = "Erstattung erhalten"
+            case (.verrechnung, false): what = "Erstattung mit Einzahlung verrechnet"
+            case (.verrechnung, true): what = "Rückzahlung mit Einzahlung verrechnet"
+            }
+            let note = m.note.map(\.trimmed).flatMap { $0.isEmpty ? nil : $0 }
+            return ManualRow(
                 id: m.id,
-                title: m.note.map(\.trimmed).flatMap { $0.isEmpty ? nil : $0 } ?? "Von Hand verbucht",
-                subtitle: "\(GermanDates.bookingDay(m.settledOn, today: today)) · \(name(m.personId))",
-                amount: Money.format(m.amountCents, style: .exact)
+                title: note ?? what,
+                subtitle: "\(GermanDates.bookingDay(m.settledOn, today: today)) · \(name(m.personId))"
+                    + (note == nil ? "" : " · \(what)"),
+                amount: Money.format(abs(m.amountCents), style: .exact)
             )
         }
     }
