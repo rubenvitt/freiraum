@@ -2164,6 +2164,91 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /v1/accounts/{accountId}/cash-expenses:
+    post:
+      tags:
+        - Konten
+      summary: Barausgabe erfassen
+      description: "Legt im Bargeldkonto eine bestätigte Ausgabe an, gleich einem Topf aus dem Haushalt des Kontos zugeordnet. Idempotent über clientId: Ein zweiter Aufruf mit derselben clientId legt nichts an und liefert die vorhandene Buchung (200). Es entsteht keine Regel."
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: accountId
+          in: path
+      requestBody:
+        description: Barausgabe
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                clientId:
+                  type: string
+                  format: uuid
+                  description: Von der App je Eingabe einmal erzeugt, schützt vor doppelten Buchungen
+                bookingDate:
+                  type: string
+                  format: date
+                  example: 2026-11-03
+                amountCents:
+                  type: integer
+                  minimum: 1
+                  maximum: 100000000
+                  description: Ausgegebener Betrag in Cent, positiv (wird als Ausgang gebucht)
+                  example: 450
+                description:
+                  type: string
+                  maxLength: 300
+                  description: Wofür oder wo, z. B. „Bäcker“
+                potId:
+                  type: string
+                  format: uuid
+              required:
+                - clientId
+                - bookingDate
+                - amountCents
+                - potId
+      responses:
+        "200":
+          description: Schon erfasst (gleiche clientId)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transaction"
+        "201":
+          description: Barausgabe erfasst
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transaction"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Konto nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Kein Bargeldkonto, Topf aus anderem Haushalt oder archiviert
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/households/{householdId}/rules:
     get:
       tags:
