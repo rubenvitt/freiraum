@@ -84,7 +84,7 @@ function loadLlm(env: Env): LlmConfig | null {
     baseUrl,
     apiKey,
     model: requiredWith(env, 'LLM_MODEL', 'LLM_API_KEY'),
-    timeoutMs: positiveInt(env, 'LLM_TIMEOUT_MS', 20_000),
+    timeoutMs: positiveInt(env, 'LLM_TIMEOUT_MS', 60_000),
     zeroDataRetention: bool(env, 'LLM_ZDR', true),
   }
 }

@@ -14,12 +14,20 @@ const config: LlmConfig = {
 }
 
 const request: LlmRequest = {
-  transaction: {
-    bookingDate: '2026-11-02',
-    amountCents: -4_250,
-    counterpartyName: 'Supermarkt Beispiel',
-    purpose: 'Einkauf 2026-11-02',
-  },
+  transactions: [
+    {
+      bookingDate: '2026-11-02',
+      amountCents: -4_250,
+      counterpartyName: 'Supermarkt Beispiel',
+      purpose: 'Einkauf 2026-11-02',
+    },
+    {
+      bookingDate: '2026-11-01',
+      amountCents: 300_000,
+      counterpartyName: 'Arbeitgeberin Beispiel',
+      purpose: null,
+    },
+  ],
   options: [
     { kind: 'einnahme', potId: null, label: 'Einnahme (Noch ohne Aufgabe)', groupName: null },
     { kind: 'umbuchung', potId: null, label: 'Umbuchung', groupName: null },
@@ -59,17 +67,34 @@ const reply = (content: unknown) =>
     ],
   })
 
+const answers = (...items: unknown[]) => reply({ antworten: items })
+
+const groceries = {
+  kind: 'topf',
+  potId: '11111111-1111-4111-8111-111111111111',
+  confidencePct: 82,
+  reason: 'Supermarkt, also Lebensmittel.',
+}
+
 describe('OpenRouter-Adapter', () => {
-  it('fragt mit JSON-Schema und Datenschutz-Vorgaben und übersetzt die Antwort', async () => {
+  it('fragt mehrere Buchungen mit JSON-Schema und Datenschutz-Vorgaben in einer Anfrage', async () => {
     const { categorizer, calls } = adapter(() =>
-      reply({ option: 'o3', confidence_pct: 82, reason: '  Supermarkt,\n also Lebensmittel. ' }),
+      answers(
+        // Reihenfolge der Antworten egal, Zuordnung über die Kennung.
+        { buchung: 'b2', option: 'o1', confidence_pct: 95, reason: 'Gehalt.' },
+        {
+          buchung: 'b1',
+          option: 'o3',
+          confidence_pct: 82,
+          reason: '  Supermarkt,\n also Lebensmittel. ',
+        },
+      ),
     )
-    expect(await categorizer.suggest(request)).toEqual({
-      kind: 'topf',
-      potId: '11111111-1111-4111-8111-111111111111',
-      confidencePct: 82,
-      reason: 'Supermarkt, also Lebensmittel.',
-    })
+    expect(await categorizer.suggest(request)).toEqual([
+      groceries,
+      { kind: 'einnahme', potId: null, confidencePct: 95, reason: 'Gehalt.' },
+    ])
+    expect(calls).toHaveLength(1)
     const [call] = calls
     expect(call?.url).toBe('https://openrouter.ai/api/v1/chat/completions')
     expect(new Headers(call?.init.headers).get('authorization')).toBe('Bearer sk-test-nicht-echt')
@@ -81,18 +106,43 @@ describe('OpenRouter-Adapter', () => {
         type: 'json_schema',
         json_schema: {
           strict: true,
-          schema: { properties: { option: { enum: ['o1', 'o2', 'o3'] } } },
+          schema: {
+            required: ['antworten'],
+            properties: {
+              antworten: {
+                type: 'array',
+                items: {
+                  properties: {
+                    buchung: { enum: ['b1', 'b2'] },
+                    option: { enum: ['o1', 'o2', 'o3'] },
+                  },
+                },
+              },
+            },
+          },
         },
       },
     })
+    // Platz für die Antworten aller Buchungen.
+    expect(call?.body.max_tokens).toBeGreaterThanOrEqual(2 * 100)
     const user = JSON.parse(call?.body.messages[1].content)
     expect(user).toEqual({
-      buchung: {
-        datum: '2026-11-02',
-        betrag: '-42,50 EUR',
-        gegenpartei: 'Supermarkt Beispiel',
-        verwendungszweck: 'Einkauf 2026-11-02',
-      },
+      buchungen: [
+        {
+          id: 'b1',
+          datum: '2026-11-02',
+          betrag: '-42,50 EUR',
+          gegenpartei: 'Supermarkt Beispiel',
+          verwendungszweck: 'Einkauf 2026-11-02',
+        },
+        {
+          id: 'b2',
+          datum: '2026-11-01',
+          betrag: '3000,00 EUR',
+          gegenpartei: 'Arbeitgeberin Beispiel',
+          verwendungszweck: null,
+        },
+      ],
       optionen: [
         { id: 'o1', ziel: 'Einnahme (Noch ohne Aufgabe)' },
         { id: 'o2', ziel: 'Umbuchung' },
@@ -104,17 +154,14 @@ describe('OpenRouter-Adapter', () => {
   })
 
   it('lässt zdr weg, wenn abgeschaltet, und schickt anderen Schnittstellen kein provider', async () => {
-    const off = adapter(() => reply({ option: 'o1', confidence_pct: 50, reason: 'Gehalt.' }), {
-      zeroDataRetention: false,
-    })
+    const ok = () => answers({ buchung: 'b1', option: 'o1', confidence_pct: 50, reason: 'Gehalt.' })
+    const off = adapter(ok, { zeroDataRetention: false })
     await off.categorizer.suggest(request)
     expect(off.calls[0]?.body.provider).toEqual({
       require_parameters: true,
       data_collection: 'deny',
     })
-    const local = adapter(() => reply({ option: 'o1', confidence_pct: 50, reason: 'Gehalt.' }), {
-      baseUrl: 'http://ollama.lan:11434/v1',
-    })
+    const local = adapter(ok, { baseUrl: 'http://ollama.lan:11434/v1' })
     await local.categorizer.suggest(request)
     expect(local.calls[0]?.url).toBe('http://ollama.lan:11434/v1/chat/completions')
     expect(local.calls[0]?.body.provider).toBeUndefined()
@@ -122,28 +169,49 @@ describe('OpenRouter-Adapter', () => {
 
   it('begrenzt die Konfidenz und liest JSON auch aus einem Codeblock', async () => {
     const { categorizer } = adapter(() =>
-      reply('```json\n{"option":"o2","confidence_pct":140.4,"reason":"Sparkonto."}\n```'),
+      reply(
+        '```json\n{"antworten":[{"buchung":"b1","option":"o2","confidence_pct":140.4,"reason":"Sparkonto."}]}\n```',
+      ),
     )
-    expect(await categorizer.suggest(request)).toMatchObject({
-      kind: 'umbuchung',
-      potId: null,
-      confidencePct: 100,
-    })
+    expect(await categorizer.suggest(request)).toEqual([
+      { kind: 'umbuchung', potId: null, confidencePct: 100, reason: 'Sparkonto.' },
+      null,
+    ])
   })
 
-  it('liefert null bei unbrauchbaren Antworten', async () => {
-    const answers = [
-      reply({ option: 'o9', confidence_pct: 80, reason: 'Erfunden.' }),
-      reply({ option: 'o1', confidence_pct: 80, reason: '   ' }),
-      reply({ option: 'o1' }),
+  it('verwirft einzelne unbrauchbare Antworten und behält die übrigen', async () => {
+    const { categorizer } = adapter(() =>
+      answers(
+        {
+          buchung: 'b1',
+          option: 'o3',
+          confidence_pct: 82,
+          reason: 'Supermarkt, also Lebensmittel.',
+        },
+        // doppelt: die erste zählt
+        { buchung: 'b1', option: 'o1', confidence_pct: 99, reason: 'Anders.' },
+        { buchung: 'b9', option: 'o1', confidence_pct: 80, reason: 'Unbekannte Buchung.' },
+        { buchung: 'b2', option: 'o9', confidence_pct: 80, reason: 'Erfundene Option.' },
+        { buchung: 'b2' },
+        'kein Objekt',
+      ),
+    )
+    expect(await categorizer.suggest(request)).toEqual([groceries, null])
+  })
+
+  it('liefert lauter null bei unbrauchbaren Antworten', async () => {
+    const replies = [
+      answers({ buchung: 'b1', option: 'o1', confidence_pct: 80, reason: '   ' }),
+      reply({ option: 'o1', confidence_pct: 80, reason: 'Ohne Array.' }),
+      reply({ antworten: 'kein Array' }),
       reply('kein JSON'),
       Response.json({ choices: [] }),
       Response.json({ choices: [{ message: { content: null } }] }),
       new Response('nicht einmal JSON'),
     ]
-    for (const answer of answers) {
+    for (const answer of replies) {
       const { categorizer } = adapter(() => answer)
-      expect(await categorizer.suggest(request)).toBeNull()
+      expect(await categorizer.suggest(request)).toEqual([null, null])
     }
   })
 
@@ -165,9 +233,10 @@ describe('OpenRouter-Adapter', () => {
     await expect(offline.categorizer.suggest(request)).rejects.toThrow('nicht erreichbar')
   })
 
-  it('fragt ohne Optionen gar nicht erst', async () => {
+  it('fragt ohne Optionen oder Buchungen gar nicht erst', async () => {
     const { categorizer, calls } = adapter(() => reply({}))
-    expect(await categorizer.suggest({ ...request, options: [] })).toBeNull()
+    expect(await categorizer.suggest({ ...request, options: [] })).toEqual([null, null])
+    expect(await categorizer.suggest({ ...request, transactions: [] })).toEqual([])
     expect(calls).toHaveLength(0)
   })
 })
