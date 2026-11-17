@@ -225,7 +225,7 @@ struct PotEditorView: View {
 }
 
 /// Zahl mit Einheit in einer Formularzeile.
-private struct AmountField: View {
+struct AmountField: View {
     let title: String
     @Binding var text: String
     let unit: String

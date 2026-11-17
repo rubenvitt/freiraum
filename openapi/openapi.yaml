@@ -1266,12 +1266,45 @@ components:
               displayName:
                 type: string
               rule:
-                allOf:
-                  - $ref: "#/components/schemas/ContributionRule"
-                  - type:
-                      - object
+                type:
+                  - object
+                  - "null"
+                properties:
+                  householdId:
+                    type: string
+                    format: uuid
+                  personId:
+                    type: string
+                    format: uuid
+                  validFrom:
+                    type: string
+                    pattern: ^\d{4}-(0[1-9]|1[0-2])$
+                    example: 2026-11
+                  kind:
+                    type: string
+                    enum:
+                      - fest
+                      - prozent
+                  amountCents:
+                    type:
+                      - integer
                       - "null"
-                    description: gültige Regel im Monat
+                  percentBp:
+                    type:
+                      - integer
+                      - "null"
+                  updatedAt:
+                    type: string
+                    format: date-time
+                required:
+                  - householdId
+                  - personId
+                  - validFrom
+                  - kind
+                  - amountCents
+                  - percentBp
+                  - updatedAt
+                description: gültige Regel im Monat
               targetCents:
                 type:
                   - integer
