@@ -304,6 +304,280 @@ components:
         - rawId
         - type
         - response
+    Household:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum:
+            - privat
+            - gemeinsam
+        name:
+          type: string
+        members:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              displayName:
+                type: string
+            required:
+              - id
+              - displayName
+      required:
+        - id
+        - kind
+        - name
+        - members
+    Account:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        householdId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        source:
+          type: string
+          enum:
+            - bank
+            - bar
+            - manuell
+          description: bank = importiert, bar = Bargeld (wird erfasst), manuell = Import per Datei/App
+        iban:
+          type:
+            - string
+            - "null"
+        currency:
+          type: string
+          enum:
+            - EUR
+        createdAt:
+          type: string
+          format: date-time
+        lastImportAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+      required:
+        - id
+        - householdId
+        - name
+        - source
+        - iban
+        - currency
+        - createdAt
+        - lastImportAt
+    ImportResult:
+      type: object
+      properties:
+        importId:
+          type: string
+          format: uuid
+        received:
+          type: integer
+        imported:
+          type: integer
+          description: neu übernommen
+        skipped:
+          type: integer
+          description: schon bekannt (idempotent)
+        recurring:
+          type: object
+          properties:
+            active:
+              type: integer
+            ended:
+              type: integer
+          required:
+            - active
+            - ended
+      required:
+        - importId
+        - received
+        - imported
+        - skipped
+        - recurring
+    IncomingTransaction:
+      type: object
+      properties:
+        sourceId:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Quell-ID der Bank. Nur angeben, wenn sie bei jedem Abruf gleich bleibt.
+        bookingDate:
+          type: string
+          format: date
+          example: 2026-11-03
+        valueDate:
+          type: string
+          format: date
+          example: 2026-11-03
+        amountCents:
+          type: integer
+          minimum: -100000000000
+          maximum: 100000000000
+          description: Betrag in Cent; negativ = Ausgang
+          example: -1299
+        currency:
+          type: string
+          enum:
+            - EUR
+          default: EUR
+        counterpartyName:
+          type: string
+          maxLength: 300
+        counterpartyIban:
+          type: string
+          example: DE02120300000000202051
+        purpose:
+          type: string
+          maxLength: 2000
+      required:
+        - bookingDate
+        - amountCents
+    Transaction:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        accountId:
+          type: string
+          format: uuid
+        sourceId:
+          type:
+            - string
+            - "null"
+        bookingDate:
+          type: string
+          format: date
+          example: 2026-11-03
+        valueDate:
+          type:
+            - string
+            - "null"
+          format: date
+          example: 2026-11-03
+        amountCents:
+          type: integer
+        currency:
+          type: string
+          enum:
+            - EUR
+        counterpartyName:
+          type:
+            - string
+            - "null"
+        counterpartyIban:
+          type:
+            - string
+            - "null"
+        purpose:
+          type:
+            - string
+            - "null"
+        status:
+          type: string
+          enum:
+            - importiert
+            - vorgeschlagen
+            - bestaetigt
+        recurringSeriesId:
+          type:
+            - string
+            - "null"
+          format: uuid
+      required:
+        - id
+        - accountId
+        - sourceId
+        - bookingDate
+        - valueDate
+        - amountCents
+        - currency
+        - counterpartyName
+        - counterpartyIban
+        - purpose
+        - status
+        - recurringSeriesId
+    RecurringSeries:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        accountId:
+          type: string
+          format: uuid
+        counterparty:
+          type: string
+        direction:
+          type: string
+          enum:
+            - eingang
+            - ausgang
+        cadence:
+          type: string
+          enum:
+            - woechentlich
+            - zweiwoechentlich
+            - monatlich
+            - quartalsweise
+            - halbjaehrlich
+            - jaehrlich
+        typicalAmountCents:
+          type: integer
+          description: Median der Beträge
+        minAmountCents:
+          type: integer
+        maxAmountCents:
+          type: integer
+        occurrences:
+          type: integer
+        firstDate:
+          type: string
+          format: date
+          example: 2026-11-03
+        lastDate:
+          type: string
+          format: date
+          example: 2026-11-03
+        nextExpectedDate:
+          type: string
+          format: date
+          example: 2026-11-03
+        state:
+          type: string
+          enum:
+            - aktiv
+            - beendet
+          description: beendet = nächste Buchung deutlich überfällig (z. B. gekündigtes Abo)
+      required:
+        - id
+        - accountId
+        - counterparty
+        - direction
+        - cadence
+        - typicalAmountCents
+        - minAmountCents
+        - maxAmountCents
+        - occurrences
+        - firstDate
+        - lastDate
+        - nextExpectedDate
+        - state
   parameters: {}
 paths:
   /health:
@@ -514,6 +788,301 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Person"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/households:
+    get:
+      tags:
+        - Haushalte
+      summary: Haushalte, in denen die angemeldete Person Mitglied ist
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Haushalte
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Household"
+                required:
+                  - items
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/accounts:
+    post:
+      tags:
+        - Konten
+      summary: Konto in einem eigenen Haushalt anlegen
+      security:
+        - bearerAuth: []
+      requestBody:
+        description: Neues Konto
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                householdId:
+                  type: string
+                  format: uuid
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                source:
+                  type: string
+                  enum:
+                    - bank
+                    - bar
+                    - manuell
+                  description: bank = importiert, bar = Bargeld (wird erfasst), manuell = Import per Datei/App
+                iban:
+                  type: string
+                  example: DE02120300000000202051
+              required:
+                - householdId
+                - name
+                - source
+      responses:
+        "201":
+          description: Konto angelegt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Fachlich unzulässig
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    get:
+      tags:
+        - Konten
+      summary: Konten aller eigenen Haushalte
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Konten
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Account"
+                required:
+                  - items
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/accounts/{accountId}/imports:
+    post:
+      tags:
+        - Konten
+      summary: Buchungen idempotent importieren
+      description: "Bekannte Buchungen werden übersprungen: Schlüssel ist die Quell-ID, sonst ein Hash aus Konto, Buchungstag, Betrag, Verwendungszweck und Gegenpartei (plus Vorkommen bei gleichen Buchungen am selben Tag). Ein Abruf sollte deshalb immer ganze Tage abdecken. Danach werden die wiederkehrenden Serien des Kontos neu berechnet."
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: accountId
+          in: path
+      requestBody:
+        description: Gebuchte Umsätze (keine vorgemerkten)
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                transactions:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/IncomingTransaction"
+                  maxItems: 10000
+              required:
+                - transactions
+      responses:
+        "201":
+          description: Import abgeschlossen
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportResult"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Konto nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Fachlich unzulässig, z. B. Bargeldkonto
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/accounts/{accountId}/transactions:
+    get:
+      tags:
+        - Konten
+      summary: Buchungen eines Kontos, neueste zuerst
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: accountId
+          in: path
+        - schema:
+            type: string
+            format: date
+            example: 2026-11-03
+          required: false
+          name: from
+          in: query
+        - schema:
+            type: string
+            format: date
+            example: 2026-11-03
+          required: false
+          name: to
+          in: query
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 200
+          required: false
+          name: limit
+          in: query
+      responses:
+        "200":
+          description: Buchungen
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Transaction"
+                required:
+                  - items
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Konto nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/recurring:
+    get:
+      tags:
+        - Wiederkehrend
+      summary: Erkannte wiederkehrende Buchungen (Abos, Miete, Gehalt)
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            enum:
+              - aktiv
+              - beendet
+          required: false
+          name: state
+          in: query
+        - schema:
+            type: string
+            format: uuid
+          required: false
+          name: accountId
+          in: query
+      responses:
+        "200":
+          description: Serien
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RecurringSeries"
+                required:
+                  - items
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "401":
           description: Nicht angemeldet
           content:

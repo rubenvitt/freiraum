@@ -6,12 +6,15 @@ import { AuthService } from './auth/service.js'
 import { loadConfig } from './config.js'
 import { createDb } from './db/client.js'
 import { migrate } from './db/migrate.js'
+import { LedgerService } from './ledger/service.js'
 
 const USAGE = `Verwendung:
   cli migrate                    Datenbank-Migrationen anwenden
   cli person-anlegen <Name>      Person anlegen und Einladung ausgeben
   cli einladen <Person-ID>       neue Einladung (weiterer Passkey, Wiederherstellung)
-  cli personen                   Personen mit Anzahl Passkeys auflisten`
+  cli personen                   Personen mit Anzahl Passkeys auflisten
+  cli gemeinsam-anlegen <Person-ID> <Person-ID> <Name>
+                                 gemeinsamen Haushalt für zwei Personen anlegen`
 
 async function main(args: string[]): Promise<number> {
   const [command, ...rest] = args
@@ -49,6 +52,17 @@ async function main(args: string[]): Promise<number> {
         for (const p of await auth.listPersons()) {
           console.log(`${p.id}  ${p.displayName}  Passkeys: ${p.passkeys}`)
         }
+        return 0
+      }
+      case 'gemeinsam-anlegen': {
+        const [a, b, ...nameParts] = rest
+        const name = nameParts.join(' ').trim() || 'Gemeinsam'
+        if (!a || !b) throw new Error('Zwei Person-IDs nötig')
+        const household = await new LedgerService(db).createSharedHousehold(name, [a, b])
+        const members = household.members.map((m) => m.displayName).join(' und ')
+        console.log(
+          `Gemeinsamer Haushalt angelegt: ${household.name} (${household.id}), ${members}`,
+        )
         return 0
       }
       default:

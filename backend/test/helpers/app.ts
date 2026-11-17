@@ -1,4 +1,5 @@
 import { createApp } from '../../src/app.js'
+import { hashToken, newToken } from '../../src/auth/tokens.js'
 import type { Config } from '../../src/config.js'
 import { createDb, type Db } from '../../src/db/client.js'
 import { TEST_DATABASE_URL } from './env.js'
@@ -17,7 +18,7 @@ export const testConfig: Config = {
 
 export function setupTestApp() {
   const db: Db = createDb(TEST_DATABASE_URL)
-  const { app, auth } = createApp({ db, config: testConfig })
+  const { app, auth, ledger } = createApp({ db, config: testConfig })
 
   const request = (method: string, path: string, body?: unknown, token?: string) =>
     app.request(path, {
@@ -32,5 +33,16 @@ export function setupTestApp() {
   const reset = () =>
     db`truncate persons, invitations, passkeys, webauthn_challenges, sessions cascade`
 
-  return { db, app, auth, request, reset }
+  /** Person mit Sitzung anlegen, ohne Passkey-Ablauf (der ist in auth.test.ts geprüft). */
+  const personWithSession = async (name: string) => {
+    const person = await auth.createPerson(name)
+    const token = newToken('frs')
+    await db`
+      insert into sessions (person_id, token_hash, expires_at)
+      values (${person.id}, ${hashToken(token)}, now() + interval '1 day')
+    `
+    return { person, token }
+  }
+
+  return { db, app, auth, ledger, request, reset, personWithSession }
 }

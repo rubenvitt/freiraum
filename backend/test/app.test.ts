@@ -36,12 +36,17 @@ describe('OpenAPI-Vertrag', () => {
     expect(doc.openapi).toBe('3.1.0')
     expect(Object.keys(doc.paths).sort()).toEqual([
       '/health',
+      '/v1/accounts',
+      '/v1/accounts/{accountId}/imports',
+      '/v1/accounts/{accountId}/transactions',
       '/v1/auth/login/options',
       '/v1/auth/login/verify',
       '/v1/auth/logout',
       '/v1/auth/registration/options',
       '/v1/auth/registration/verify',
+      '/v1/households',
       '/v1/me',
+      '/v1/recurring',
     ])
   })
 
