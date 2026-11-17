@@ -951,6 +951,501 @@ components:
           default: null
       required:
         - kind
+    Metrics:
+      type: object
+      properties:
+        householdId:
+          type: string
+          format: uuid
+        from:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        to:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        months:
+          type: array
+          items:
+            $ref: "#/components/schemas/MonthMetrics"
+        totals:
+          $ref: "#/components/schemas/MetricsTotals"
+        runway:
+          $ref: "#/components/schemas/Runway"
+      required:
+        - householdId
+        - from
+        - to
+        - months
+        - totals
+        - runway
+    MonthMetrics:
+      type: object
+      properties:
+        month:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        incomeCents:
+          type: integer
+          description: "Einkommen: Einnahme-Aufteilungen"
+        consumptionCents:
+          type: integer
+          description: "Konsum (positiv = ausgegeben): Töpfe außer Erst-ich, abzüglich Erstattungen, plus nicht zugeordnete Ausgänge"
+        erstIchCents:
+          type: integer
+          description: Ausgaben aus Erst-ich-Töpfen (Sparen, kein Konsum)
+        savedCents:
+          type: integer
+          description: Einkommen − Konsum
+        savingsRateBp:
+          type:
+            - integer
+            - "null"
+          description: "Sparquote: Gespart ÷ Einkommen, in Basispunkten"
+        fixedCostsCents:
+          type: integer
+          description: Konsum aus wiederkehrenden Ausgängen (Miete, Versicherungen, Abos)
+        fixedCostShareBp:
+          type:
+            - integer
+            - "null"
+          description: Fixkosten ÷ Einkommen, in Basispunkten
+        uncategorizedOutCents:
+          type: integer
+          description: nicht zugeordnete Ausgänge
+        uncategorizedInCents:
+          type: integer
+          description: nicht zugeordnete Eingänge (zählen nicht als Einkommen)
+        ageOfMoneyDays:
+          type:
+            - integer
+            - "null"
+          description: "Alter des Geldes am Monatsende (bzw. heute): Durchschnitt der letzten 10 Ausgänge, wie lange das ausgegebene Geld schon da war (älteste Eingänge zuerst verbraucht)"
+      required:
+        - month
+        - incomeCents
+        - consumptionCents
+        - erstIchCents
+        - savedCents
+        - savingsRateBp
+        - fixedCostsCents
+        - fixedCostShareBp
+        - uncategorizedOutCents
+        - uncategorizedInCents
+        - ageOfMoneyDays
+    MetricsTotals:
+      type: object
+      properties:
+        incomeCents:
+          type: integer
+          description: "Einkommen: Einnahme-Aufteilungen"
+        consumptionCents:
+          type: integer
+          description: "Konsum (positiv = ausgegeben): Töpfe außer Erst-ich, abzüglich Erstattungen, plus nicht zugeordnete Ausgänge"
+        erstIchCents:
+          type: integer
+          description: Ausgaben aus Erst-ich-Töpfen (Sparen, kein Konsum)
+        savedCents:
+          type: integer
+          description: Einkommen − Konsum
+        savingsRateBp:
+          type:
+            - integer
+            - "null"
+          description: "Sparquote: Gespart ÷ Einkommen, in Basispunkten"
+        fixedCostsCents:
+          type: integer
+          description: Konsum aus wiederkehrenden Ausgängen (Miete, Versicherungen, Abos)
+        fixedCostShareBp:
+          type:
+            - integer
+            - "null"
+          description: Fixkosten ÷ Einkommen, in Basispunkten
+        uncategorizedOutCents:
+          type: integer
+          description: nicht zugeordnete Ausgänge
+        uncategorizedInCents:
+          type: integer
+          description: nicht zugeordnete Eingänge (zählen nicht als Einkommen)
+      required:
+        - incomeCents
+        - consumptionCents
+        - erstIchCents
+        - savedCents
+        - savingsRateBp
+        - fixedCostsCents
+        - fixedCostShareBp
+        - uncategorizedOutCents
+        - uncategorizedInCents
+    Runway:
+      type: object
+      properties:
+        cashCents:
+          type: integer
+          description: "Geld des Haushalts heute: Noch ohne Aufgabe + alle Töpfe + nicht zugeordnete Buchungen"
+        averageMonthlyConsumptionCents:
+          type:
+            - integer
+            - "null"
+        basedOnMonths:
+          type: integer
+          description: abgeschlossene Monate im Schnitt (höchstens 6)
+        months:
+          type:
+            - number
+            - "null"
+          description: Monate ohne Einkommen bei diesem Konsum, eine Nachkommastelle
+          example: 7.4
+      required:
+        - cashCents
+        - averageMonthlyConsumptionCents
+        - basedOnMonths
+        - months
+    Flow:
+      type: object
+      properties:
+        householdId:
+          type: string
+          format: uuid
+        from:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        to:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/FlowNode"
+        links:
+          type: array
+          items:
+            $ref: "#/components/schemas/FlowLink"
+        inCents:
+          type: integer
+          description: Zufluss in den Haushalt (ohne Ausgleich)
+        outCents:
+          type: integer
+          description: Abfluss aus dem Haushalt (ohne Ausgleich)
+      required:
+        - householdId
+        - from
+        - to
+        - nodes
+        - links
+        - inCents
+        - outCents
+      description: "Sankey: Quellen → Haushalt → Gruppen → Töpfe. Die Mitte ist ausgeglichen („Aus Erspartem“ bzw. „Übrig“). Umbuchungen zwischen eigenen Konten fehlen."
+    FlowNode:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        kind:
+          type: string
+          enum:
+            - quelle
+            - haushalt
+            - gruppe
+            - topf
+            - rest
+        potId:
+          type:
+            - string
+            - "null"
+          format: uuid
+        potKind:
+          type:
+            - string
+            - "null"
+          enum:
+            - monatlich
+            - ruecklage
+            - ziel
+            - erst_ich
+            - null
+      required:
+        - id
+        - label
+        - kind
+        - potId
+        - potKind
+    FlowLink:
+      type: object
+      properties:
+        source:
+          type: string
+        target:
+          type: string
+        valueCents:
+          type: integer
+          description: immer positiv
+      required:
+        - source
+        - target
+        - valueCents
+    Anomalies:
+      type: object
+      properties:
+        householdId:
+          type: string
+          format: uuid
+        month:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Anomaly"
+      required:
+        - householdId
+        - month
+        - items
+    Anomaly:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum:
+            - ausgaben_hoch
+            - neues_abo
+            - preis_erhoeht
+        title:
+          type: string
+          description: ein Satz für die Anzeige
+        potId:
+          type:
+            - string
+            - "null"
+          format: uuid
+        seriesId:
+          type:
+            - string
+            - "null"
+          format: uuid
+        amountCents:
+          type: integer
+        referenceCents:
+          type:
+            - integer
+            - "null"
+      required:
+        - kind
+        - title
+        - potId
+        - seriesId
+        - amountCents
+        - referenceCents
+    Goals:
+      type: object
+      properties:
+        householdId:
+          type: string
+          format: uuid
+        month:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/GoalForecast"
+      required:
+        - householdId
+        - month
+        - items
+    GoalForecast:
+      type: object
+      properties:
+        potId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        targetCents:
+          type: integer
+        savedCents:
+          type: integer
+          description: Verfügbar im Topf, ≥ 0
+        remainingCents:
+          type: integer
+        progressBp:
+          type: integer
+        targetMonth:
+          type:
+            - string
+            - "null"
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        monthlyRateCents:
+          type: integer
+          description: Durchschnittliche Zuweisung der letzten 3 Monate (mit dem laufenden)
+        projectedMonth:
+          type:
+            - string
+            - "null"
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+          description: Monat, in dem das Ziel bei dieser Rate erreicht ist
+        requiredMonthlyCents:
+          type:
+            - integer
+            - "null"
+          description: Monatlich nötig ab dem nächsten Monat, um den Zielmonat zu halten
+        status:
+          type: string
+          enum:
+            - erreicht
+            - im_plan
+            - verspaetet
+            - ohne_sparrate
+      required:
+        - potId
+        - name
+        - targetCents
+        - savedCents
+        - remainingCents
+        - progressBp
+        - targetMonth
+        - monthlyRateCents
+        - projectedMonth
+        - requiredMonthlyCents
+        - status
+    OwnershipCosts:
+      type: object
+      properties:
+        householdId:
+          type: string
+          format: uuid
+        from:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        to:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssetCosts"
+        totalCostCents:
+          type: integer
+        shareOfConsumptionBp:
+          type:
+            - integer
+            - "null"
+          description: Anteil der Besitzkosten am Konsum
+      required:
+        - householdId
+        - from
+        - to
+        - items
+        - totalCostCents
+        - shareOfConsumptionBp
+    AssetCosts:
+      type: object
+      properties:
+        assetId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        valueCents:
+          type:
+            - integer
+            - "null"
+        costCents:
+          type: integer
+          description: Nettokosten im Zeitraum aus den Töpfen (positiv = kostet)
+        recurringCostCents:
+          type: integer
+          description: davon wiederkehrend
+        monthlyAverageCents:
+          type: integer
+        annualCostOfValueBp:
+          type:
+            - integer
+            - "null"
+          description: Jahreskosten im Verhältnis zum Wert, in Basispunkten
+        classification:
+          type: string
+          enum:
+            - verbindlichkeit
+            - vermoegenswert
+            - neutral
+          description: "Vermögenswert ohne Gewinn = Verbindlichkeit: kostet mehr, als er einbringt"
+        pots:
+          type: array
+          items:
+            type: object
+            properties:
+              potId:
+                type: string
+                format: uuid
+              name:
+                type: string
+              costCents:
+                type: integer
+            required:
+              - potId
+              - name
+              - costCents
+      required:
+        - assetId
+        - name
+        - valueCents
+        - costCents
+        - recurringCostCents
+        - monthlyAverageCents
+        - annualCostOfValueBp
+        - classification
+        - pots
+    Asset:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        householdId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        valueCents:
+          type:
+            - integer
+            - "null"
+          description: aktueller Wert, von Hand
+        sortOrder:
+          type: integer
+        potIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: Töpfe mit den laufenden Kosten
+        archived:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - householdId
+        - name
+        - valueCents
+        - sortOrder
+        - potIds
+        - archived
+        - createdAt
   parameters: {}
 paths:
   /health:
@@ -2300,6 +2795,519 @@ paths:
                 $ref: "#/components/schemas/Error"
         "404":
           description: Regel nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/households/{householdId}/analytics/metrics:
+    get:
+      tags: &a1
+        - Auswertungen
+      summary: "Kennzahlen je Monat: Sparquote, Fixkostenanteil, Alter des Geldes; dazu Runway"
+      security: &a2
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+        - schema:
+            type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+            example: 2026-11
+            description: "Standard: 11 Monate vor `to`"
+          required: false
+          description: "Standard: 11 Monate vor `to`"
+          name: from
+          in: query
+        - schema:
+            type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+            example: 2026-11
+            description: "Standard: laufender Monat"
+          required: false
+          description: "Standard: laufender Monat"
+          name: to
+          in: query
+      responses:
+        "200":
+          description: Kennzahlen
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Metrics"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Zeitraum ungültig (Anfang nach Ende oder mehr als 120 Monate)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/households/{householdId}/analytics/flow:
+    get:
+      tags: *a1
+      summary: "Geldfluss als Sankey: woher, wohin"
+      security: *a2
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+        - schema:
+            type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+            example: 2026-11
+            description: "Standard: `to`"
+          required: false
+          description: "Standard: `to`"
+          name: from
+          in: query
+        - schema:
+            type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+            example: 2026-11
+            description: "Standard: laufender Monat"
+          required: false
+          description: "Standard: laufender Monat"
+          name: to
+          in: query
+      responses:
+        "200":
+          description: Geldfluss
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Flow"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Zeitraum ungültig (Anfang nach Ende oder mehr als 120 Monate)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/households/{householdId}/analytics/anomalies:
+    get:
+      tags: *a1
+      summary: "Auffälligkeiten eines Monats: hohe Ausgaben, neue Abos, Preiserhöhungen"
+      security: *a2
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+        - schema:
+            type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+            example: 2026-11
+            description: "Standard: laufender Monat"
+          required: false
+          description: "Standard: laufender Monat"
+          name: month
+          in: query
+      responses:
+        "200":
+          description: Auffälligkeiten
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Anomalies"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/households/{householdId}/analytics/goals:
+    get:
+      tags: *a1
+      summary: Ziel-Töpfe mit Prognose, wann das Ziel erreicht ist
+      security: *a2
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+      responses:
+        "200":
+          description: Ziele
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Goals"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/households/{householdId}/analytics/ownership-costs:
+    get:
+      tags: *a1
+      summary: "Besitzkosten: Was kostet mich mein Besitz?"
+      security: *a2
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+        - schema:
+            type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+            example: 2026-11
+            description: "Standard: 11 Monate vor `to`"
+          required: false
+          description: "Standard: 11 Monate vor `to`"
+          name: from
+          in: query
+        - schema:
+            type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+            example: 2026-11
+            description: "Standard: laufender Monat"
+          required: false
+          description: "Standard: laufender Monat"
+          name: to
+          in: query
+      responses:
+        "200":
+          description: Besitzkosten
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OwnershipCosts"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Zeitraum ungültig (Anfang nach Ende oder mehr als 120 Monate)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/households/{householdId}/assets:
+    get:
+      tags:
+        - Besitz
+      summary: Besitz eines Haushalts
+      security: *a2
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+        - schema:
+            type: string
+            enum:
+              - "true"
+              - "false"
+            default: "false"
+          required: false
+          name: includeArchived
+          in: query
+      responses:
+        "200":
+          description: Besitz
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Asset"
+                required:
+                  - items
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags:
+        - Besitz
+      summary: Besitz anlegen und mit Töpfen verknüpfen
+      security: *a2
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+      requestBody:
+        description: Neuer Besitz
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                valueCents:
+                  type:
+                    - integer
+                    - "null"
+                  minimum: 0
+                  maximum: 100000000000
+                potIds:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                  maxItems: 50
+                sortOrder:
+                  type: integer
+                  minimum: 0
+                  maximum: 100000
+              required:
+                - name
+      responses:
+        "201":
+          description: Besitz angelegt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Asset"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Name vergeben oder Topf schon mit anderem Besitz verknüpft
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Topf aus anderem Haushalt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/assets/{assetId}:
+    patch:
+      tags:
+        - Besitz
+      summary: Besitz ändern, Töpfe neu verknüpfen oder archivieren
+      security: *a2
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: assetId
+          in: path
+      requestBody:
+        description: Änderungen
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                valueCents:
+                  type:
+                    - integer
+                    - "null"
+                  minimum: 0
+                  maximum: 100000000000
+                potIds:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                  maxItems: 50
+                  description: ersetzt die ganze Liste
+                sortOrder:
+                  type: integer
+                  minimum: 0
+                  maximum: 100000
+                archived:
+                  type: boolean
+      responses:
+        "200":
+          description: Besitz geändert
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Asset"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Besitz nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Name vergeben oder Topf schon mit anderem Besitz verknüpft
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Topf aus anderem Haushalt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags:
+        - Besitz
+      summary: Besitz löschen (Töpfe und Buchungen bleiben)
+      security: *a2
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: assetId
+          in: path
+      responses:
+        "204":
+          description: Gelöscht
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Besitz nicht gefunden (oder kein Zugriff)
           content:
             application/json:
               schema:

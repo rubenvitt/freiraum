@@ -1,4 +1,5 @@
 import { OpenAPIHono } from '@hono/zod-openapi'
+import { AnalyticsService } from './analytics/service.js'
 import type { Person } from './auth/service.js'
 import { AuthService } from './auth/service.js'
 import { BudgetService } from './budget/service.js'
@@ -9,6 +10,7 @@ import type { Config } from './config.js'
 import type { Db } from './db/client.js'
 import { ApiError } from './errors.js'
 import { LedgerService } from './ledger/service.js'
+import { analyticsRoutes } from './routes/analytics.js'
 import { authRoutes } from './routes/auth.js'
 import { budgetRoutes } from './routes/budget.js'
 import { categorizeRoutes } from './routes/categorize.js'
@@ -20,6 +22,7 @@ export const API_VERSION = '0.1.0'
 
 export type AppEnv = {
   Variables: {
+    analytics: AnalyticsService
     auth: AuthService
     budget: BudgetService
     categorize: CategorizationService
@@ -45,6 +48,7 @@ export function createApp(deps: { db: Db; config: Config; llm?: LlmCategorizer |
   const auth = new AuthService(deps.db, deps.config)
   const budget = new BudgetService(deps.db)
   const categorize = new CategorizationService(deps.db, budget, llm)
+  const analytics = new AnalyticsService(deps.db, budget)
   const ledger = new LedgerService(deps.db, {
     // Regeln in der Import-Transaktion, LLM danach (Netzwerk, ohne offene Transaktion).
     inTransaction: async (tx, ids, asOf) => {
@@ -72,6 +76,7 @@ export function createApp(deps: { db: Db; config: Config; llm?: LlmCategorizer |
   })
 
   app.use(async (c, next) => {
+    c.set('analytics', analytics)
     c.set('auth', auth)
     c.set('budget', budget)
     c.set('categorize', categorize)
@@ -102,11 +107,12 @@ export function createApp(deps: { db: Db; config: Config; llm?: LlmCategorizer |
   ledgerRoutes(app)
   budgetRoutes(app)
   categorizeRoutes(app)
+  analyticsRoutes(app)
   webRoutes(app)
 
   app.doc31('/openapi.json', openApiInfo)
 
-  return { app, auth, budget, categorize, ledger }
+  return { app, analytics, auth, budget, categorize, ledger }
 }
 
 export const openApiInfo = {
