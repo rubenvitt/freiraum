@@ -9,7 +9,7 @@ import { CategorizationService } from './categorize/service.js'
 import type { Config } from './config.js'
 import type { Db } from './db/client.js'
 import { ApiError } from './errors.js'
-import { LedgerService } from './ledger/service.js'
+import { type ImportHooks, LedgerService } from './ledger/service.js'
 import { analyticsRoutes } from './routes/analytics.js'
 import { authRoutes } from './routes/auth.js'
 import { budgetRoutes } from './routes/budget.js'
@@ -46,18 +46,20 @@ export function createApp(deps: { db: Db; config: Config; llm?: LlmCategorizer |
         ? new OpenRouterCategorizer(deps.config.llm)
         : null
   const auth = new AuthService(deps.db, deps.config)
-  const budget = new BudgetService(deps.db)
-  const categorize = new CategorizationService(deps.db, budget, llm)
-  const analytics = new AnalyticsService(deps.db, budget)
-  const ledger = new LedgerService(deps.db, {
-    // Regeln in der Import-Transaktion, LLM danach (Netzwerk, ohne offene Transaktion).
+  // Für Buchungen, die neu ins Budget kommen (Import, früherer Budgetbeginn): Regeln in der
+  // Transaktion, LLM danach (Netzwerk, ohne offene Transaktion).
+  const suggest: ImportHooks = {
     inTransaction: async (tx, ids, asOf) => {
       await categorize.applyRules(tx, ids, asOf)
     },
     afterCommit: async (ids, asOf) => {
       await categorize.suggestWithLlm(ids, asOf)
     },
-  })
+  }
+  const budget = new BudgetService(deps.db, suggest)
+  const categorize = new CategorizationService(deps.db, budget, llm)
+  const analytics = new AnalyticsService(deps.db, budget)
+  const ledger = new LedgerService(deps.db, suggest)
 
   const app = new OpenAPIHono<AppEnv>({
     defaultHook: (result, c) => {

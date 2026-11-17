@@ -257,8 +257,8 @@ export class AnalyticsService {
   }
 
   /**
-   * Geld des Haushalts laut Budget: „Noch ohne Aufgabe“ + Zuweisungen späterer Monate + alle
-   * Töpfe (= Einnahmen + Aufteilungen), dazu noch nicht zugeordnete Buchungen.
+   * Geld des Haushalts laut Budget: „Noch ohne Aufgabe“ (mit Anfangsbestand) + Zuweisungen
+   * späterer Monate + alle Töpfe, dazu noch nicht zugeordnete Buchungen ab dem Budgetbeginn.
    */
   private async cash(
     sql: Sql,
@@ -269,8 +269,14 @@ export class AnalyticsService {
     const data = await this.budget.loadData(sql, householdId)
     const month = computeMonth(data, current)
     const inPots = month.pots.reduce((n, p) => n + p.availableCents, 0)
+    const start = data.start?.month ?? null
+    // Wie im Budget zählt nur, was ab dem Budgetbeginn gebucht ist; davor steckt alles im
+    // Anfangsbestand.
     const unassigned = transactions
-      .filter((t) => t.splits.length === 0 && monthOf(t.bookingDate) <= current)
+      .filter((t) => {
+        const m = monthOf(t.bookingDate)
+        return t.splits.length === 0 && m <= current && (start === null || m >= start)
+      })
       .reduce((n, t) => n + t.amountCents, 0)
     return month.readyToAssignCents + month.assignedInFutureCents + inPots + unassigned
   }

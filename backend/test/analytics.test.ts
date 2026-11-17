@@ -135,6 +135,20 @@ describe('Kennzahlen', () => {
     })
   })
 
+  it('zählt im Runway nur Geld ab dem Budgetbeginn (davor steckt es im Anfangsbestand)', async () => {
+    const a = await scenario()
+    const res = await request(
+      'PUT',
+      `/v1/households/${a.householdId}/budget-start`,
+      { month: current },
+      a.token,
+    )
+    expect(res.status).toBe(200)
+    const m = await body(await analytics(a.token, a.householdId, 'metrics'))
+    // ohne bekannte Kontostände ist der Anfangsbestand 0: nur Gehalt und Einkauf des Monats
+    expect(m.runway.cashCents).toBe(290_000)
+  })
+
   it('nimmt standardmäßig die letzten 12 Monate und prüft den Zeitraum', async () => {
     const a = await setup()
     const m = await body(await analytics(a.token, a.householdId, 'metrics'))

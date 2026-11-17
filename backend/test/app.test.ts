@@ -37,6 +37,7 @@ describe('OpenAPI-Vertrag', () => {
     expect(Object.keys(doc.paths).sort()).toEqual([
       '/health',
       '/v1/accounts',
+      '/v1/accounts/{accountId}/balance',
       '/v1/accounts/{accountId}/imports',
       '/v1/accounts/{accountId}/transactions',
       '/v1/assets/{assetId}',
@@ -52,6 +53,7 @@ describe('OpenAPI-Vertrag', () => {
       '/v1/households/{householdId}/analytics/metrics',
       '/v1/households/{householdId}/analytics/ownership-costs',
       '/v1/households/{householdId}/assets',
+      '/v1/households/{householdId}/budget-start',
       '/v1/households/{householdId}/budget/{month}',
       '/v1/households/{householdId}/budget/{month}/closing',
       '/v1/households/{householdId}/budget/{month}/erst-ich',

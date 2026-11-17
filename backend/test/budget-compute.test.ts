@@ -171,3 +171,55 @@ describe('Erst-ich-Automatik', () => {
     expect(Object.fromEntries(result)).toEqual({ investieren: 10_000 })
   })
 })
+
+describe('Budgetbeginn', () => {
+  const history = data({
+    pots: [pot('essen'), pot('investieren', { kind: 'erst_ich', percentBp: 1_000 })],
+    start: { month: '2026-10', openingBalanceCents: 120_000 },
+    inflows: [
+      { month: '2024-11', amountCents: 300_000 },
+      { month: '2026-09', amountCents: 300_000 },
+      { month: '2026-10', amountCents: 300_000 },
+    ],
+    assignments: [
+      { potId: 'essen', month: '2026-09', amountCents: 50_000, source: 'manuell' },
+      { potId: 'essen', month: '2026-10', amountCents: 40_000, source: 'manuell' },
+    ],
+    activity: [
+      { potId: 'essen', month: '2026-09', amountCents: -80_000 },
+      { potId: 'essen', month: '2026-10', amountCents: -10_000 },
+    ],
+  })
+
+  it('ignoriert alles vor dem Startmonat und zählt den Anfangsbestand', () => {
+    const oct = computeMonth(history, '2026-10')
+    expect(oct).toMatchObject({
+      openingBalanceCents: 120_000,
+      inflowsCents: 300_000,
+      // 120 000 + 300 000 − 40 000; Überziehung aus 2026-09 zählt nicht
+      readyToAssignCents: 380_000,
+      overspentPreviousCents: 0,
+    })
+    expect(oct.pots[0]).toMatchObject({ carryoverCents: 0, availableCents: 30_000 })
+    const nov = computeMonth(history, '2026-11')
+    expect(nov).toMatchObject({ openingBalanceCents: 0, readyToAssignCents: 380_000 })
+    expect(nov.pots[0]).toMatchObject({ carryoverCents: 30_000 })
+  })
+
+  it('zeigt Monate vor dem Start leer', () => {
+    const sep = computeMonth(history, '2026-09')
+    expect(sep).toMatchObject({
+      openingBalanceCents: 0,
+      inflowsCents: 0,
+      readyToAssignCents: 0,
+      assignedInFutureCents: 0,
+    })
+    expect(sep.pots.map((p) => p.availableCents)).toEqual([0, 0])
+  })
+
+  it('nimmt den Anfangsbestand nicht in Erst-ich-Anteile', () => {
+    const result = erstIchAssignments(history, ['investieren'], '2026-10', '2026-11')
+    expect(Object.fromEntries(result)).toEqual({ investieren: 30_000 })
+    expect(readyToAssignFor(history, '2026-09', '2026-11')).toBe(0)
+  })
+})

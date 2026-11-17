@@ -42,9 +42,8 @@ Division durch null.
 - **Runway** = Geld des Haushalts ÷ durchschnittlicher Konsum der letzten bis zu 6
   abgeschlossenen Monate. Das Geld kommt aus dem Budget („Noch ohne Aufgabe“ + Zuweisungen
   späterer Monate + Verfügbar aller Töpfe) plus nicht zugeordnete Buchungen. Erst-ich zählt nicht
-  zum Konsum: Ohne Einkommen würde man nicht weiter sparen. Kontostände der Bank gibt es noch
-  nicht; mit FREI-12/FREI-13 (Salden, Anfangsbestand) wird die Zahl genauer, ohne dass sich die
-  Definition ändert.
+  zum Konsum: Ohne Einkommen würde man nicht weiter sparen. Wie im Budget zählt alles ab dem
+  Budgetbeginn; was davor lag, steckt im Anfangsbestand (FREI-13).
 - **Alter des Geldes** (wie bei YNAB): Eingänge bilden eine Warteschlange, jeder Ausgang
   verbraucht die ältesten zuerst. Das Alter eines Ausgangs ist der mit dem Betrag gewichtete
   Abstand in Tagen; die Kennzahl ist der Durchschnitt der letzten 10 Ausgänge. Ausgänge ohne
@@ -105,8 +104,9 @@ ein Umbenennen würde still die Auswertung ändern.
   Aufgabe“ und sind keinem Besitz zugeordnet. Damit ist heute jeder Besitz mit Kosten eine
   Verbindlichkeit. Eine Zuordnung von Einnahmen zu Besitz ist eine Folgeaufgabe, falls sie
   gebraucht wird.
-- Mit dem Budgetbeginn (FREI-13) zählen im Runway auch nicht zugeordnete Buchungen erst ab dem
-  Startmonat; das ist beim Zusammenführen nachzuziehen.
+- Vor dem Budgetbeginn werden Buchungen nicht zugeordnet. Kennzahlen für diese Monate zeigen
+  deshalb kein Einkommen und alle Ausgänge als „nicht zugeordnet“. Aussagekräftig sind die
+  Auswertungen ab dem Budgetbeginn; die Apps sollten den Zeitraum dort beginnen lassen.
 - Freigaben (E4) sollen Kennzahlen wie die Sparquote der anderen Person zeigen können. Die
   Auswertungen sind dafür schon je Haushalt geschnitten; die Freigabe selbst kommt mit FREI-5.
 - Die macOS-App (Menüleiste, Planungsansicht, Charts) baut auf diesen Endpunkten auf und folgt,
