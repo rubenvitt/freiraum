@@ -68,11 +68,13 @@ extension BudgetMonth {
 }
 
 extension SplitTarget {
-    init(kind: String, potId: String?) throws {
+    init(kind: String, potId: String?, personId: String?) throws {
         switch (kind, potId) {
         case ("topf", let id?): self = .pot(id)
         case ("einnahme", _): self = .income
         case ("umbuchung", _): self = .transfer
+        case ("einzahlung", _): self = .contribution(personId: personId)
+        case ("ausgleich", _): self = .settlement(personId: personId)
         default: throw MappingError(description: "Aufteilung \(kind)")
         }
     }
@@ -82,6 +84,8 @@ extension SplitTarget {
         case .pot: .topf
         case .income: .einnahme
         case .transfer: .umbuchung
+        case .contribution: .einzahlung
+        case .settlement: .ausgleich
         }
     }
 
@@ -89,11 +93,22 @@ extension SplitTarget {
         if case let .pot(id) = self { return id }
         return nil
     }
+
+    var personId: String? {
+        switch self {
+        case let .contribution(id), let .settlement(id): id
+        case .pot, .income, .transfer: nil
+        }
+    }
 }
 
 extension Split {
-    var api: Components.Schemas.Split {
-        .init(kind: target.apiKind, potId: target.potId, amountCents: amountCents)
+    /// Eingabe für `PUT /v1/transactions/{id}/splits` (`SplitInput` = `Split`, potId und personId optional).
+    var api: Components.Schemas.SplitInput {
+        .init(
+            value1: .init(kind: target.apiKind, potId: target.potId, personId: target.personId, amountCents: amountCents),
+            value2: .init(potId: target.potId, personId: target.personId)
+        )
     }
 }
 
@@ -103,13 +118,45 @@ extension Transaction {
         self.init(
             id: t.id, accountId: t.accountId, bookingDate: t.bookingDate, amountCents: t.amountCents,
             counterpartyName: t.counterpartyName, purpose: t.purpose, status: status,
-            splits: try t.splits.map { Split(target: try SplitTarget(kind: $0.kind.rawValue, potId: $0.potId), amountCents: $0.amountCents) },
+            splits: try t.splits.map {
+                Split(target: try SplitTarget(kind: $0.kind.rawValue, potId: $0.potId, personId: $0.personId), amountCents: $0.amountCents)
+            },
             suggestion: try t.suggestion.map { s in
                 guard let source = Suggestion.Source(rawValue: s.source.rawValue) else { throw MappingError(description: "Quelle \(s.source.rawValue)") }
                 return Suggestion(
-                    source: source, target: try SplitTarget(kind: s.kind.rawValue, potId: s.potId),
+                    source: source, target: try SplitTarget(kind: s.kind.rawValue, potId: s.potId, personId: s.personId),
                     confidencePct: s.confidencePct, reason: s.reason
                 )
+            }
+        )
+    }
+}
+
+extension Settlements {
+    init(_ s: Components.Schemas.Settlements) {
+        self.init(
+            householdId: s.householdId,
+            balances: s.balances.map {
+                Balance(
+                    personId: $0.personId, displayName: $0.displayName, claimedCents: $0.claimedCents,
+                    repaidCents: $0.repaidCents, debtCents: $0.debtCents, paidBackCents: $0.paidBackCents,
+                    openCents: $0.openCents
+                )
+            },
+            openItems: s.openItems.map {
+                Item(
+                    transactionId: $0.transactionId, personId: $0.personId, bookingDate: $0.bookingDate,
+                    counterpartyName: $0.counterpartyName, amountCents: $0.amountCents, openCents: $0.openCents
+                )
+            },
+            openDebts: s.openDebts.map {
+                Item(
+                    transactionId: $0.transactionId, personId: $0.personId, bookingDate: $0.bookingDate,
+                    counterpartyName: $0.counterpartyName, amountCents: $0.amountCents, openCents: $0.openCents
+                )
+            },
+            manual: s.manual.map {
+                Manual(id: $0.id, personId: $0.personId, amountCents: $0.amountCents, settledOn: $0.settledOn, note: $0.note)
             }
         )
     }

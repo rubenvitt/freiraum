@@ -51,6 +51,11 @@ für iOS und macOS ohne Signatur.
   `clear` im `PATCH`, weil der generierte Client `null` nicht sendet.
 - Barausgaben landen im Bargeldkonto des Haushalts; fehlt es, legt die App beim ersten Erfassen
   eins an. Abhebungen am Automaten als „Umbuchung“ zuordnen.
+- Gemeinsames Konto, privater Einkauf: beim Bestätigen „Ändern“ und einen Topf unter
+  „Privat (ich zahle zurück)“ wählen. Der Betrag steht dann als Schuld im Ausgleich (Übersicht
+  „Gemeinsam“). Zurückgezahlt wird per Überweisung aufs gemeinsame Konto, die man dort als
+  „Rückzahlung von …“ zuordnet (nicht als Einzahlung). Umgekehrt landet ein gemeinsamer Topf vom
+  privaten Konto als Forderung im Ausgleich.
 - „Buchungen warten“ meldet die App selbst per Hintergrundabruf (etwa stündlich, iOS entscheidet).
   Im Simulator lässt sich der Abruf in Xcode über *Debug › Simulate Background Fetch* auslösen.
 - Das Widget zeigt den privaten Haushalt im laufenden Monat und liest nur, was die App zuletzt
