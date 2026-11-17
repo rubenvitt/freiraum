@@ -6,6 +6,7 @@ import {
   type ContributionsView,
   type Metrics,
   type ReceivedShare,
+  SETTLEMENT_KINDS,
   type SettlementsView,
   SHARE_SCOPES,
   type ShareEntry,
@@ -21,6 +22,14 @@ const ShareScope = z.enum(SHARE_SCOPES).openapi({
     'eigenen Einzahlungsregel „Prozent vom Netto“ (verrät sonst das Einkommen); budget = Budget ' +
     'und Töpfe des privaten Haushalts lesen (ohne Buchungen, ohne Ändern); sparquote = ' +
     'Sparquote des Monats als Prozentwert (ohne Beträge)',
+})
+
+const SettlementKind = z.enum(SETTLEMENT_KINDS).openapi({
+  description:
+    'zahlung = Geld außerhalb der Konten erhalten (z. B. bar), ohne Wirkung aufs Budget; ' +
+    'verrechnung = mit der Einzahlung verrechnet: zählt wie eine Einzahlung im Ist, im ' +
+    'gemeinsamen Budget als Eingang und im privaten Budget der Person als Minderung von „Noch ' +
+    'ohne Aufgabe“',
 })
 
 const ShareSchema = z
@@ -103,7 +112,10 @@ const ContributionsSchema = z
           description:
             'false bei „Prozent vom Netto“ der anderen Person ohne Freigabe einzahlung_soll',
         }),
-        paidCents: z.number().int().openapi({ description: 'Ist: Einzahlungen im Monat' }),
+        paidCents: z.number().int().openapi({
+          description:
+            'Ist: Einzahlungen im Monat, plus verrechnete Forderungen und minus verrechnete Schulden',
+        }),
         remainingCents: z.number().int().nullable().openapi({ description: 'Soll − Ist, ≥ 0' }),
       }),
     ),
@@ -121,15 +133,17 @@ const SettlementsSchema = z
           .number()
           .int()
           .openapi({ description: 'privat bezahlte gemeinsame Ausgaben' }),
-        repaidCents: z.number().int().openapi({ description: 'erstattet (Überweisung, von Hand)' }),
+        repaidCents: z
+          .number()
+          .int()
+          .openapi({ description: 'erstattet (Überweisung, von Hand, verrechnet)' }),
         debtCents: z
           .number()
           .int()
           .openapi({ description: 'vom gemeinsamen Konto bezahlte private Ausgaben' }),
-        paidBackCents: z
-          .number()
-          .int()
-          .openapi({ description: 'zurückgezahlt (Überweisung aufs gemeinsame Konto)' }),
+        paidBackCents: z.number().int().openapi({
+          description: 'zurückgezahlt (Überweisung aufs gemeinsame Konto, verrechnet)',
+        }),
         openCents: z
           .number()
           .int()
@@ -170,7 +184,15 @@ const SettlementsSchema = z
       z.object({
         id: z.uuid(),
         personId: z.uuid(),
-        amountCents: z.number().int(),
+        kind: SettlementKind,
+        amountCents: z
+          .number()
+          .int()
+          .openapi({
+            description:
+              'positiv = das Gemeinsame erstattet der Person; negativ = die Person zahlt dem ' +
+              'Gemeinsamen zurück (nur bei verrechnung)',
+          }),
         settledOn: IsoDate,
         note: z.string().nullable(),
         createdAt: z.iso.datetime(),
@@ -377,7 +399,14 @@ const recordSettlement = createRoute({
   method: 'post',
   path: '/v1/households/{householdId}/settlements',
   tags: ['Paar'],
-  summary: 'Ausgleich von Hand verbuchen (z. B. bar erhalten), nur für die eigene Forderung',
+  summary: 'Ausgleich von Hand verbuchen oder mit der Einzahlung verrechnen',
+  description:
+    'Nur für den eigenen Saldo und höchstens so viel, wie offen ist. Eine Zahlung (z. B. bar ' +
+    'erhalten) gibt es nur für eine Forderung. Eine Verrechnung geht in beide Richtungen und ' +
+    'ergibt sich aus dem Saldo: Bei einer Forderung zählt sie als Erstattung und als zusätzliche ' +
+    'Einzahlung (450 € überwiesen + 50 € verrechnet = 500 € Ist), bei einer Schuld als ' +
+    'Rückzahlung und als geringere Einzahlung. Sie ändert das private Budget der Person und geht ' +
+    'deshalb nicht in abgeschlossenen Monaten und nicht vor dem Budgetbeginn.',
   security,
   middleware: [requireAuth] as const,
   request: {
@@ -385,7 +414,10 @@ const recordSettlement = createRoute({
     body: json(
       z.object({
         amountCents: z.number().int().min(1).max(100_000_000_000),
-        settledOn: IsoDate.optional(),
+        kind: SettlementKind.optional().openapi({ description: 'Standard: zahlung' }),
+        settledOn: IsoDate.optional().openapi({
+          description: 'Standard: heute; bei verrechnung zählt der Monat für Ist und Budget',
+        }),
         note: z.string().trim().max(300).optional(),
       }),
       'Erhaltener Betrag',
@@ -396,6 +428,7 @@ const recordSettlement = createRoute({
     400: error('Ungültige Anfrage'),
     401: error('Nicht angemeldet'),
     404: error('Haushalt nicht gefunden (oder kein Zugriff)'),
+    409: error('Verrechnung in einem abgeschlossenen Monat oder vor dem Budgetbeginn'),
     422: error('Kein gemeinsamer Haushalt oder mehr als offen'),
   },
 })
@@ -414,6 +447,7 @@ const deleteSettlement = createRoute({
     401: error('Nicht angemeldet'),
     403: error('Ausgleich einer anderen Person'),
     404: error('Ausgleich nicht gefunden (oder kein Zugriff)'),
+    409: error('Verrechnung in einem abgeschlossenen Monat oder vor dem Budgetbeginn'),
   },
 })
 

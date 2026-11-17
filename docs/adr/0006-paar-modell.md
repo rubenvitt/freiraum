@@ -1,6 +1,6 @@
 # ADR 0006: Paar-Modell (E4)
 
-Stand: 17.11.2026 · Status: vorgeschlagen (mit FREI-5, ergänzt mit FREI-18)
+Stand: 17.11.2026 · Status: vorgeschlagen (mit FREI-5, ergänzt mit FREI-18 und FREI-28)
 
 ## Kontext
 
@@ -101,15 +101,37 @@ ihrem eigenen privaten Topf zu (auch teilweise).
   Topf ist dort nur die ID zu sehen. Budget und Töpfe des privaten Haushalts bleiben ohne
   Freigabe `budget` „nicht gefunden“. Der Ausgleich nennt den Topf gar nicht.
 
-**Verrechnen mit der Einzahlung (Vorschlag, nicht umgesetzt).** Statt 50 € zurückzuüberweisen
-und 500 € einzuzahlen, zahlt man 450 € ein und verrechnet 50 €. Damit beide Budgets stimmen,
-muss der verrechnete Betrag **wie eine Einzahlung zählen**: im Gemeinsamen als Einnahme, im
-Privaten als Minderung von „Noch ohne Aufgabe“, im Ist der Einzahlungsregel, und zugleich als
-Erstattung bzw. Rückzahlung im Ausgleich. Sonst fehlt dem Gemeinsamen Budget, das auf dem Konto
-liegt (oder umgekehrt). Das ginge als eigene Art eines von Hand verbuchten Ausgleichs
-(`settlements.kind = 'verrechnung'`), den die Budgetrechnung beider Haushalte mitliest. Ob das
-die Überweisungen im Alltag spart, entscheiden die beiden Personen; bis dahin bleibt es bei
-Überweisungen.
+### Verrechnen mit der Einzahlung (FREI-28)
+
+Statt 50 € zurückzuüberweisen und 500 € einzuzahlen, zahlt man 450 € ein und verrechnet 50 €.
+Entschieden am 17.11.2026: Freiraum bietet das an, Überweisungen in beide Richtungen bleiben
+daneben möglich.
+
+- Eine Verrechnung ist ein **von Hand verbuchter Ausgleich der Art `verrechnung`**
+  (`settlements.kind`, Migration 0009). Der bisherige Ausgleich von Hand (z. B. bar erhalten) hat
+  die Art `zahlung` und wirkt weiterhin nicht aufs Budget.
+- Der verrechnete Betrag **zählt wie eine Einzahlung**, und zwar im Monat von `settledOn`:
+  im Gemeinsamen als Eingang, im privaten Haushalt der Person als Minderung von „Noch ohne
+  Aufgabe“, im Ist der Einzahlungsregel. Zugleich gilt er im Ausgleich als Erstattung. Nur so
+  stimmen beide Budgets mit den Kontoständen: Das Gemeinsame hat 450 € auf dem Konto und 50 €
+  im Topf ausgegeben, also müssen 500 € hereingekommen sein; privat sind 500 € weg, aber nur
+  450 € als Einzahlung gebucht.
+- **Beide Richtungen.** Die Richtung ergibt sich aus dem Saldo der Person. Bei einer Forderung
+  wird der Betrag positiv gespeichert (Erstattung, zählt als mehr Einzahlung). Bei einer Schuld
+  (umgekehrter Ausgleich) wird er negativ gespeichert: Wer 530 € einzahlt und 30 € Schuld
+  verrechnet, hat 500 € Ist und keine Schuld mehr; im privaten Budget kommen die 30 € zurück
+  nach „Noch ohne Aufgabe“, weil der private Topf die Ausgabe schon trägt.
+- Höchstens der offene Saldo, und **nur die Person selbst**: Eine Verrechnung ändert ihr privates
+  Budget, also verbucht und nimmt sie nur sie zurück. Die andere Person sieht sie im Ausgleich
+  (`manual`), wie jede Buchung dort.
+- Nicht in einem **abgeschlossenen Monat** und nicht **vor dem Budgetbeginn** eines der beiden
+  Haushalte (409). Sonst änderte sich ein festgehaltener Stand, oder die Verrechnung fiele in
+  einem Haushalt aus der Rechnung und die Budgets stimmten nicht mehr. Danach füllt Erst-ich in
+  beiden Haushalten neu, wie nach einer Einzahlung.
+- Verworfene Alternative: die Überweisung auf beiden Konten aufteilen (450 € = 500 € Einzahlung −
+  50 € Ausgleich). Das rechnet seit FREI-18 schon richtig, braucht aber zwei Korrekturen von Hand
+  an zwei Buchungen, die der Abgleich jedes Mal wieder als reine Einzahlung vorschlägt. Die
+  Verrechnung ist ein Eintrag, unabhängig von Buchung und Import.
 
 ### Freigaben
 
@@ -142,8 +164,11 @@ die Überweisungen im Alltag spart, entscheiden die beiden Personen; bis dahin b
 - Die Sparquote ([ADR 0005](0005-auswertungen.md)) ist seit FREI-19 als Freigabe `sparquote`
   ergänzt (Migration 0007). Einzahlungen ins Gemeinsame mindern die private Sparquote.
 - Ausgaben vom gemeinsamen Konto für einen privaten Topf (umgekehrter Ausgleich) sind seit
-  FREI-18 umgesetzt (Migration 0008). Das Verrechnen eines Ausgleichs mit der nächsten Einzahlung
-  ist als Vorschlag beschrieben, aber nicht umgesetzt (FREI-28).
+  FREI-18 umgesetzt (Migration 0008), das Verrechnen mit der Einzahlung seit FREI-28
+  (Migration 0009).
+- Die Auswertungen kennen Verrechnungen nicht, weil sie Buchungen lesen. Eine verrechnete
+  Forderung erscheint in der privaten Sparquote deshalb nicht als Einzahlung; die Ausgabe im
+  gemeinsamen Topf zählt dort ohnehin nicht. Das gehört zu FREI-22.
 - Die Auswertungen rechnen weiter je Haushalt der Konten. Ausgaben über Haushaltsgrenzen
   (gemeinsamer Topf vom privaten Konto und umgekehrt) erscheinen dort beim Konto, nicht beim
   Topf; das gehört zu den Auswertungen über Haushalte hinweg (FREI-22).
