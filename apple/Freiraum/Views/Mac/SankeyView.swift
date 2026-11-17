@@ -7,7 +7,10 @@ import SwiftUI
 /// privat, Orange = aus Erspartem, Grau = übrig oder nicht zugeordnet.
 struct SankeyView: View {
     let flow: MoneyFlow
+    /// Art des Haushalts beim Geldfluss eines Haushalts
     let householdKind: Household.Kind
+    /// Art je Haushalt beim Geldfluss über Haushalte (Knoten nennen ihren Haushalt)
+    var kinds: [String: Household.Kind] = [:]
 
     @State private var hovered: SankeyLayout.Link?
     @State private var pointer: CGPoint = .zero
@@ -74,28 +77,33 @@ struct SankeyView: View {
         return p
     }
 
-    private var householdColor: Color {
-        householdKind == .gemeinsam ? Theme.shared : Theme.personal
+    /// Blau = gemeinsam, Violett = privat; beim Geldfluss über Haushalte je Knoten.
+    private func householdColor(_ node: SankeyLayout.Node?) -> Color {
+        let kind = node?.householdId.flatMap { kinds[$0] } ?? householdKind
+        return kind == .gemeinsam ? Theme.shared : Theme.personal
     }
 
     private func nodeColor(_ node: SankeyLayout.Node) -> Color {
         switch node.kind {
-        case .haushalt: householdColor
-        case .quelle: node.id == "quelle:erspartes" ? Theme.warning : householdColor
+        case .haushalt: householdColor(node)
+        case .quelle: node.localId == "quelle:erspartes" ? Theme.warning : householdColor(node)
+        case .einzahlung: Theme.shared
         case .gruppe: Theme.text.opacity(0.85)
         case .topf: node.potKind == .erstIch ? Theme.accent : Theme.text.opacity(0.85)
         case .rest: Theme.secondary
         }
     }
 
-    /// Band in der Farbe des Endes, das nicht der Haushalt ist (Quelle links, Ziel rechts).
+    /// Band in der Farbe des Endes, das nicht der Haushalt ist (Quelle links, Ziel rechts);
+    /// zwischen zwei Haushalten (Einzahlung) in der Farbe des Ziels.
     private func linkColor(_ link: SankeyLayout.Link, in layout: SankeyLayout) -> Color {
         let end = layout.node(link.source)?.kind == .haushalt ? layout.node(link.target) : layout.node(link.source)
-        guard let end else { return householdColor }
+        guard let end else { return householdColor(nil) }
         if end.kind == .topf, end.potKind == .erstIch { return Theme.accent }
-        if end.id == "quelle:erspartes" { return Theme.warning }
+        if end.localId == "quelle:erspartes" { return Theme.warning }
         if end.kind == .rest { return Theme.secondary }
-        return householdColor
+        if end.kind == .einzahlung { return Theme.shared }
+        return householdColor(end)
     }
 
     // MARK: Beschriftung

@@ -7,6 +7,8 @@ import SwiftUI
 /// als Sankey, Verlauf, Auffälligkeiten, Ziele und Besitzkosten. Alle Zahlen rechnet der Server.
 struct AnalyticsView: View {
     @Environment(AppModel.self) private var model
+    /// Geldfluss über die eigenen Haushalte statt nur des gewählten
+    @AppStorage("flowAcrossHouseholds") private var acrossHouseholds = false
 
     /// Neu laden, sobald Haushalt, Monat oder Zeitraum wechseln.
     private var loadKey: String {
@@ -63,6 +65,10 @@ struct AnalyticsView: View {
         .task(id: loadKey) { await load() }
     }
 
+    private var across: Bool {
+        acrossHouseholds && model.personFlow != nil
+    }
+
     private func load() async {
         guard let id = model.selectedHousehold?.id else { return }
         await model.loadAnalytics(householdId: id)
@@ -87,8 +93,23 @@ struct AnalyticsView: View {
             ForEach(state.tiles) { MetricTileView(tile: $0) }
         }
 
-        MacCard(title: "Geldfluss", trailing: state.flowSummary) {
-            if let flow = model.flows[household.id], !flow.links.isEmpty {
+        MacCard(title: "Geldfluss", trailing: across ? "Einkommen → Ich → Gemeinsam" : state.flowSummary) {
+            if model.personFlow != nil {
+                Picker("Geldfluss", selection: $acrossHouseholds) {
+                    Text("Nur \(household.shortLabel)").tag(false)
+                    Text("Über meine Haushalte").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+            }
+            if across, let flow = model.personFlow, !flow.links.isEmpty {
+                SankeyView(
+                    flow: flow, householdKind: household.kind,
+                    kinds: Dictionary(model.households.map { ($0.id, $0.kind) }, uniquingKeysWith: { a, _ in a })
+                )
+                .frame(height: 520)
+            } else if !across, let flow = model.flows[household.id], !flow.links.isEmpty {
                 SankeyView(flow: flow, householdKind: household.kind)
                     .frame(height: 440)
             } else {

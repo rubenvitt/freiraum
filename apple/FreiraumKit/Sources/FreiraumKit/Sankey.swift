@@ -10,6 +10,10 @@ public struct SankeyLayout: Hashable, Sendable {
         public let label: String
         public let kind: MoneyFlow.Node.Kind
         public let potKind: PotKind?
+        /// nur im Geldfluss einer Person
+        public let householdId: String?
+        /// ID ohne vorangestellten Haushalt
+        public let localId: String
         public let column: Int
         /// Durchfluss: das Größere aus Zu- und Abfluss
         public let valueCents: Int
@@ -110,7 +114,8 @@ public struct SankeyLayout: Hashable, Sendable {
             for node in column {
                 let h = Double(value(node.id)) * scale
                 let n = Node(
-                    id: node.id, label: node.label, kind: node.kind, potKind: node.potKind, column: c,
+                    id: node.id, label: node.label, kind: node.kind, potKind: node.potKind,
+                    householdId: node.householdId, localId: node.localId, column: c,
                     valueCents: value(node.id), x0: x0, x1: x0 + nodeWidth, y0: y, y1: y + h
                 )
                 placed[node.id] = n

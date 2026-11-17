@@ -88,7 +88,8 @@ die CI.
   „Umschichten“ Geld zwischen „Noch ohne Aufgabe“ und Töpfen verschieben. Reicht das Geld nicht,
   steht die Meldung des Servers im Blatt. Vergangene Monate lassen sich abschließen, der zuletzt
   abgeschlossene wieder öffnen.
-- Auswertungen: Kennzahlen, Geldfluss (Sankey, mit der Maus über ein Band fahren), Verlauf von
+- Auswertungen: Kennzahlen, Geldfluss (Sankey, mit der Maus über ein Band fahren; mit
+  gemeinsamem Haushalt umschaltbar auf „Über meine Haushalte“), Verlauf von
   Sparquote, Fixkostenanteil und Alter des Geldes, Auffälligkeiten, Ziele, Besitzkosten. Der
   Zeitraum (Monat, Quartal, Jahr) endet im gewählten Monat und beginnt frühestens mit dem
   Budgetbeginn.

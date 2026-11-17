@@ -44,6 +44,9 @@ final class AppModel {
     private(set) var analytics: [String: AnalyticsState] = [:]
     /// Geldfluss je Haushalt, passend zu `analytics`.
     private(set) var flows: [String: MoneyFlow] = [:]
+    /// Geldfluss über die eigenen Haushalte (privat → Einzahlung → gemeinsam), gleicher Zeitraum;
+    /// nil mit nur einem Haushalt.
+    private(set) var personFlow: MoneyFlow?
     private(set) var isLoadingAnalytics = false
     /// Privater Haushalt im laufenden Monat und seine Auffälligkeiten, für die Menüleiste.
     private(set) var menuBarBudget: BudgetMonth?
@@ -235,6 +238,7 @@ final class AppModel {
         shares = nil
         analytics = [:]
         flows = [:]
+        personFlow = nil
         menuBarBudget = nil
         menuBarAnomalies = []
         selectedHouseholdId = nil
@@ -812,6 +816,12 @@ final class AppModel {
             analytics[householdId] = AnalyticsState(summary: s, history: h, flow: f, anomalies: a, goals: g, ownership: o)
         } catch {
             report(error)
+        }
+        // Über Haushalte hinweg nur mit gemeinsamem Haushalt; ein Fehler hier lässt den Rest stehen.
+        if let person, households.count > 1 {
+            personFlow = try? await service.personFlow(personId: person.id, from: period.lowerBound, to: period.upperBound)
+        } else {
+            personFlow = nil
         }
     }
 

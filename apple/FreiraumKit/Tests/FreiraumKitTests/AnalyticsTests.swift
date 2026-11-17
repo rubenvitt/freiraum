@@ -26,7 +26,8 @@ private let flowJSON = """
 {"householdId":"h1","from":"2026-11","to":"2026-11",
  "nodes":[{"id":"haushalt","label":"Ich","kind":"haushalt","potId":null,"potKind":null},
   {"id":"quelle:1","label":"Arbeitgeber","kind":"quelle","potId":null,"potKind":null},
-  {"id":"topf:p1","label":"Depot","kind":"topf","potId":"p1","potKind":"erst_ich"}],
+  {"id":"topf:p1","label":"Depot","kind":"topf","potId":"p1","potKind":"erst_ich"},
+  {"id":"einzahlung","label":"Ins Gemeinsame","kind":"einzahlung","potId":null,"potKind":null}],
  "links":[{"source":"quelle:1","target":"haushalt","valueCents":1000},{"source":"haushalt","target":"topf:p1","valueCents":1000}],
  "inCents":1000,"outCents":1000}
 """
@@ -73,9 +74,46 @@ private let ownershipJSON = """
         let transport = FakeTransport { _ in (200, flowJSON) }
         let flow = try await service(transport).flow(householdId: "h1", from: m(11), to: m(11))
         #expect(transport.requests.first?.path == "/v1/households/h1/analytics/flow?from=2026-11&to=2026-11")
-        #expect(flow.nodes.map(\.kind) == [.haushalt, .quelle, .topf])
+        #expect(flow.nodes.map(\.kind) == [.haushalt, .quelle, .topf, .einzahlung])
         #expect(flow.nodes[2].potKind == .erstIch)
         #expect(flow.links.count == 2)
+    }
+
+    @Test func geldflussEinerPersonUeberHaushalte() async throws {
+        let transport = FakeTransport { _ in
+            (200, """
+            {"personId":"u1","from":"2026-11","to":"2026-11",
+             "households":[{"householdId":"hp","name":"Privat","kind":"privat","inCents":300000,"outCents":300000},
+              {"householdId":"hg","name":"Gemeinsam","kind":"gemeinsam","inCents":200000,"outCents":200000}],
+             "nodes":[{"id":"hp/haushalt","label":"Privat","kind":"haushalt","potId":null,"potKind":null,"householdId":"hp"},
+              {"id":"hp/quelle:1","label":"Arbeitgeber","kind":"quelle","potId":null,"potKind":null,"householdId":"hp"},
+              {"id":"hg/haushalt","label":"Gemeinsam","kind":"haushalt","potId":null,"potKind":null,"householdId":"hg"},
+              {"id":"hg/einzahlung:u2","label":"Einzahlung Person B","kind":"einzahlung","potId":null,"potKind":null,"householdId":"hg"},
+              {"id":"hg/topf:p9","label":"Miete","kind":"topf","potId":"p9","potKind":"monatlich","householdId":"hg"},
+              {"id":"hp/rest:uebrig","label":"Übrig","kind":"rest","potId":null,"potKind":null,"householdId":"hp"}],
+             "links":[{"source":"hp/quelle:1","target":"hp/haushalt","valueCents":300000},
+              {"source":"hp/haushalt","target":"hg/haushalt","valueCents":100000},
+              {"source":"hg/einzahlung:u2","target":"hg/haushalt","valueCents":100000},
+              {"source":"hg/haushalt","target":"hg/topf:p9","valueCents":200000},
+              {"source":"hp/haushalt","target":"hp/rest:uebrig","valueCents":200000}]}
+            """)
+        }
+        let flow = try await service(transport).personFlow(personId: "u1", from: m(11), to: m(11))
+        #expect(transport.requests.first?.path == "/v1/persons/u1/analytics/flow?from=2026-11&to=2026-11")
+        #expect(flow.householdId == nil)
+        #expect(flow.inCents == 300_000)
+        #expect(flow.nodes.first { $0.kind == .einzahlung }?.householdId == "hg")
+        #expect(flow.nodes.last?.localId == "rest:uebrig")
+
+        // Privat → Gemeinsam → Töpfe: der gemeinsame Haushalt steht rechts vom privaten.
+        let layout = SankeyLayout(flow: flow, width: 1000, height: 400)
+        let privat = try #require(layout.node("hp/haushalt"))
+        let gemeinsam = try #require(layout.node("hg/haushalt"))
+        #expect(privat.column == 1)
+        #expect(gemeinsam.column == 2)
+        #expect(layout.node("hg/topf:p9")?.column == 3)
+        #expect(layout.node("hp/rest:uebrig")?.column == 3)
+        #expect(layout.node("hg/topf:p9")?.householdId == "hg")
     }
 
     @Test func auffaelligkeitenZieleBesitz() async throws {

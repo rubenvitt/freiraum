@@ -95,22 +95,35 @@ public struct Metrics: Hashable, Sendable, Codable {
 }
 
 /// Geldfluss als Sankey: Quellen → Haushalt → Gruppen → Töpfe. Die Mitte ist ausgeglichen.
+/// Auch der Geldfluss einer Person über ihre Haushalte (privat → Einzahlung → gemeinsam) hat
+/// diese Form; dann nennt jeder Knoten seinen Haushalt.
 public struct MoneyFlow: Hashable, Sendable, Codable {
     public struct Node: Hashable, Sendable, Codable, Identifiable {
-        public enum Kind: String, Sendable, Codable { case quelle, haushalt, gruppe, topf, rest }
+        /// `einzahlung`: privat der Abfluss ins Gemeinsame, gemeinsam die Einzahlung einer Person
+        public enum Kind: String, Sendable, Codable { case quelle, haushalt, einzahlung, gruppe, topf, rest }
 
         public let id: String
         public let label: String
         public let kind: Kind
         public let potId: String?
         public let potKind: PotKind?
+        /// Haushalt des Knotens; nur im Geldfluss einer Person gesetzt
+        public let householdId: String?
 
-        public init(id: String, label: String, kind: Kind, potId: String? = nil, potKind: PotKind? = nil) {
+        public init(
+            id: String, label: String, kind: Kind, potId: String? = nil, potKind: PotKind? = nil, householdId: String? = nil
+        ) {
             self.id = id
             self.label = label
             self.kind = kind
             self.potId = potId
             self.potKind = potKind
+            self.householdId = householdId
+        }
+
+        /// Knoten-ID ohne vorangestellten Haushalt („<haushalt>/quelle:erspartes“ → „quelle:erspartes“).
+        public var localId: String {
+            id.split(separator: "/", maxSplits: 1).last.map(String.init) ?? id
         }
     }
 
@@ -127,15 +140,18 @@ public struct MoneyFlow: Hashable, Sendable, Codable {
         }
     }
 
-    public let householdId: String
+    /// Haushalt; nil beim Geldfluss einer Person über ihre Haushalte
+    public let householdId: String?
     public let from: YearMonth
     public let to: YearMonth
     public let nodes: [Node]
     public let links: [Link]
+    /// Zufluss in den Haushalt (bei einer Person: in ihren privaten Haushalt)
     public let inCents: Int
+    /// Abfluss aus dem Haushalt (bei einer Person: aus ihrem privaten Haushalt)
     public let outCents: Int
 
-    public init(householdId: String, from: YearMonth, to: YearMonth, nodes: [Node], links: [Link], inCents: Int, outCents: Int) {
+    public init(householdId: String?, from: YearMonth, to: YearMonth, nodes: [Node], links: [Link], inCents: Int, outCents: Int) {
         self.householdId = householdId
         self.from = from
         self.to = to
@@ -300,6 +316,19 @@ extension FreiraumService {
         }
     }
 
+    /// Geldfluss der angemeldeten Person über ihre Haushalte: Einkommen → privat → Töpfe und
+    /// Einzahlung → gemeinsam → gemeinsame Töpfe. Nur für die eigene Person (sonst 404).
+    public func personFlow(personId: String, from: YearMonth, to: YearMonth) async throws(APIError) -> MoneyFlow {
+        try await call {
+            let out = try await client.getV1PersonsPersonIdAnalyticsFlow(
+                path: .init(personId: personId),
+                query: .init(from: from.description, to: to.description)
+            )
+            guard case let .ok(ok) = out else { throw unexpected(out) }
+            return try MoneyFlow(try ok.body.json)
+        }
+    }
+
     /// Auffälligkeiten eines Monats.
     public func anomalies(householdId: String, month: YearMonth) async throws(APIError) -> [Anomaly] {
         try await call {
@@ -398,6 +427,26 @@ extension MoneyFlow {
             },
             links: f.links.map { Link(source: $0.source, target: $0.target, valueCents: $0.valueCents) },
             inCents: f.inCents, outCents: f.outCents
+        )
+    }
+}
+
+extension MoneyFlow {
+    init(_ f: Components.Schemas.PersonFlow) throws {
+        let own = f.households.first { $0.kind.rawValue == "privat" }
+        self.init(
+            householdId: nil, from: try parseMonth(f.from), to: try parseMonth(f.to),
+            nodes: try f.nodes.map { n in
+                guard let kind = Node.Kind(rawValue: n.kind.rawValue) else {
+                    throw MappingError(description: "Knotenart \(n.kind.rawValue)")
+                }
+                return Node(
+                    id: n.id, label: n.label, kind: kind, potId: n.potId,
+                    potKind: try n.potKind.map { try PotKind(raw: $0.rawValue) }, householdId: n.householdId
+                )
+            },
+            links: f.links.map { Link(source: $0.source, target: $0.target, valueCents: $0.valueCents) },
+            inCents: own?.inCents ?? 0, outCents: own?.outCents ?? 0
         )
     }
 }
