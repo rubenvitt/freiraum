@@ -7,11 +7,28 @@ struct FreiraumApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
-        WindowGroup {
-            RootView()
+        #if os(macOS)
+        // Am Mac ein Hauptfenster und die Menüleiste. Ohne Fenster läuft die App in der
+        // Menüleiste weiter und lädt regelmäßig neu (AppModel.startPeriodicRefresh).
+        Window("Freiraum", id: AppConfig.mainWindowId) {
+            root
+        }
+        .defaultSize(width: 1280, height: 860)
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await model.load() } }
+        }
+
+        MenuBarExtra {
+            MenuBarContent()
                 .environment(model)
-                .preferredColorScheme(.dark)
-                .tint(Theme.accent)
+        } label: {
+            MenuBarLabel()
+                .environment(model)
+        }
+        .menuBarExtraStyle(.window)
+        #else
+        WindowGroup {
+            root
         }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
@@ -23,11 +40,17 @@ struct FreiraumApp: App {
                 break
             }
         }
-        #if os(iOS)
         .backgroundTask(.appRefresh(AppConfig.refreshTaskIdentifier)) {
             await model.backgroundRefresh()
         }
         #endif
+    }
+
+    private var root: some View {
+        RootView()
+            .environment(model)
+            .preferredColorScheme(.dark)
+            .tint(Theme.accent)
     }
 }
 
@@ -36,14 +59,20 @@ struct RootView: View {
 
     var body: some View {
         if model.isSignedIn {
+            #if os(macOS)
+            MacMainView()
+            #else
             MainView()
+            #endif
         } else {
             LoginView()
         }
     }
 }
 
-/// Hauptansicht: Übersicht und Töpfe, „Barausgabe erfassen“ immer erreichbar.
+#if os(iOS)
+/// Hauptansicht am iPhone: Übersicht und Töpfe, „Barausgabe erfassen“ immer erreichbar.
+/// Am Mac: `MacMainView`.
 struct MainView: View {
     @Environment(AppModel.self) private var model
     @State private var showCash = false
@@ -57,7 +86,6 @@ struct MainView: View {
                 PotsView()
             }
         }
-        #if os(iOS)
         .tabViewBottomAccessory {
             Button {
                 showCash = true
@@ -68,15 +96,9 @@ struct MainView: View {
             }
             .accessibilityHint("Öffnet die Eingabe für eine Barausgabe")
         }
-        #else
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button("Barausgabe erfassen", systemImage: "plus") { showCash = true }
-            }
-        }
-        #endif
         .sheet(isPresented: $showCash) {
             CashExpenseView()
         }
     }
 }
+#endif

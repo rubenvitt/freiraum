@@ -183,5 +183,15 @@ ein Umbenennen würde still die Auswertung ändern.
 - Eine noch nicht zugeordnete Überweisung ins Gemeinsame zählt im Runway doppelt: als Konsum
   (nicht zugeordnet gilt als ausgegeben) und über die feste Regel. Das ist vorsichtig gerechnet
   und verschwindet, sobald die Buchung als Einzahlung zugeordnet ist.
-- Die macOS-App (Menüleiste, Planungsansicht, Charts) baut auf diesen Endpunkten auf und folgt,
-  sobald das Xcode-Projekt aus E3 (FREI-4) steht.
+- Die macOS-App (FREI-21) baut auf diesen Endpunkten auf und rechnet nichts nach. FreiraumKit
+  bildet die Antworten ab und bereitet sie auf (Kacheln, Verlauf, Ziele, Besitz, Menüleiste); das
+  Sankey-Layout (Spalten, gemeinsamer Maßstab, Bänder) liegt dort als reine Funktion mit Tests
+  unter Linux, gezeichnet wird mit `Canvas`, der Verlauf mit Swift Charts. Der Zeitraum (Monat,
+  Quartal, Jahr) endet im angezeigten Monat und beginnt frühestens mit dem Budgetbeginn. Mit
+  gemeinsamem Haushalt lässt sich der Geldfluss auf „Über meine Haushalte“ umschalten
+  (`/v1/persons/{id}/analytics/flow`); das Layout behandelt beide Graphen gleich.
+- Umschichten in der Planungsansicht sind zwei Zuweisungen: erst die Quelle senken, dann das Ziel
+  erhöhen, damit „Noch ohne Aufgabe“ zwischendurch nie negativ wird. Lehnt der Server das
+  Erhöhen ab (422), nimmt die App das Senken zurück und zeigt seine Meldung. Ein eigener
+  Endpunkt fürs Umschichten in einer Transaktion wäre robuster, falls die Rücknahme scheitert
+  (z. B. Verbindung weg); bisher reicht das Neuladen danach.

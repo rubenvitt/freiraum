@@ -16,7 +16,8 @@ Anmeldung in der App, Barausgaben im Backend, Weg der Benachrichtigung und was d
 - `apple/project.yml` beschreibt das Projekt; `xcodegen generate` erzeugt `Freiraum.xcodeproj`
   (nicht eingecheckt). So bleibt das Projekt im Diff lesbar und Konflikte in `.pbxproj` entfallen.
 - Ein Ziel **Freiraum** für iOS und macOS (`supportedDestinations`), dazu **FreiraumWidget**
-  (nur iOS). macOS baut mit, die eigentliche Mac-Oberfläche kommt mit E5.
+  (nur iOS). macOS baut mit; die Mac-Oberfläche (Seitenleiste, Planung, Auswertungen,
+  Menüleiste) kam mit E5 (FREI-21, ADR 0005) in `Freiraum/Views/Mac/`.
 - **FreiraumKit** (Swift-Paket in `apple/FreiraumKit`) enthält alles ohne Oberfläche: den Client,
   Abbildung auf eigene Modelle, Beträge und Monate, Aufbereitung von Übersicht und Bestätigen,
   Eingaben (Barausgabe, Aufteilen), Widget-Schnappschuss und die Entscheidung, wann gemeldet
