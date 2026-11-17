@@ -49,6 +49,14 @@ Division durch null.
   späterer Monate + Verfügbar aller Töpfe) plus nicht zugeordnete Buchungen. Erst-ich zählt nicht
   zum Konsum: Ohne Einkommen würde man nicht weiter sparen. Wie im Budget zählt alles ab dem
   Budgetbeginn; was davor lag, steckt im Anfangsbestand (FREI-13).
+  Ergänzt mit FREI-27: Im privaten Haushalt zählen **feste Einzahlungen ins Gemeinsame** als
+  laufender Abfluss, Runway = Geld ÷ (Konsum + feste Einzahlungen). Es gilt je gemeinsamem
+  Haushalt die Regel, die im laufenden Monat gilt (ADR 0006). Eine feste Einzahlung läuft auch
+  ohne Einkommen weiter, eine Regel „Prozent vom Netto“ fällt dann weg und zählt nicht. Gerechnet
+  wird mit der Regel, nicht mit den gebuchten Einzahlungen der Vergangenheit: Der Runway fragt,
+  was ab jetzt abfließt. Ohne Konsum-Historie gibt es weiterhin keinen Runway, auch wenn eine
+  feste Einzahlung bekannt ist; ein Wert nur aus den Einzahlungen wäre geschönt. Im gemeinsamen
+  Haushalt ist die Einzahlung Einkommen und ändert den Runway nicht.
 - **Alter des Geldes** (wie bei YNAB): Eingänge bilden eine Warteschlange, jeder Ausgang
   verbraucht die ältesten zuerst. Das Alter eines Ausgangs ist der mit dem Betrag gewichtete
   Abstand in Tagen; die Kennzahl ist der Durchschnitt der letzten 10 Ausgänge. Ausgänge ohne
@@ -115,8 +123,11 @@ ein Umbenennen würde still die Auswertung ändern.
 - Die Sparquote ist seit FREI-19 als Freigabe `sparquote` für die andere Person abrufbar
   (`GET /v1/persons/{id}/metrics/{JJJJ-MM}`), nur als ganzer Prozentwert (abgerundet), ohne
   Beträge.
-- Runway, Fixkostenanteil und Sankey rechnen Einzahlungen ins Gemeinsame noch nicht mit: Der
-  Runway nimmt nur den Konsum, im Sankey landet die Einzahlung privat unter „Übrig“ und fehlt im
-  Gemeinsamen als Quelle. Das Sankey über Haushalte hinweg ist FREI-22.
+- Fixkostenanteil und Sankey rechnen Einzahlungen ins Gemeinsame noch nicht mit: Im Sankey
+  landet die Einzahlung privat unter „Übrig“ und fehlt im Gemeinsamen als Quelle. Das Sankey über
+  Haushalte hinweg ist FREI-22. Der Runway rechnet feste Einzahlungen seit FREI-27 mit.
+- Eine noch nicht zugeordnete Überweisung ins Gemeinsame zählt im Runway doppelt: als Konsum
+  (nicht zugeordnet gilt als ausgegeben) und über die feste Regel. Das ist vorsichtig gerechnet
+  und verschwindet, sobald die Buchung als Einzahlung zugeordnet ist.
 - Die macOS-App (Menüleiste, Planungsansicht, Charts) baut auf diesen Endpunkten auf und folgt,
   sobald das Xcode-Projekt aus E3 (FREI-4) steht.

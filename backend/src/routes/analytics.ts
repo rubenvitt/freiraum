@@ -82,12 +82,19 @@ const MetricsSchema = z
             'Geld des Haushalts heute: Noch ohne Aufgabe + alle Töpfe + nicht zugeordnete Buchungen',
         }),
         averageMonthlyConsumptionCents: z.number().int().nullable(),
+        fixedContributionsCents: z.number().int().openapi({
+          description:
+            'Feste Einzahlungen ins Gemeinsame, die jetzt gelten (nur privat; Prozent vom Netto zählt nicht)',
+        }),
+        monthlyOutflowCents: z.number().int().nullable().openapi({
+          description: 'Konsum im Schnitt + feste Einzahlungen; null ohne Historie',
+        }),
         basedOnMonths: z
           .number()
           .int()
           .openapi({ description: 'abgeschlossene Monate im Schnitt (höchstens 6)' }),
         months: z.number().nullable().openapi({
-          description: 'Monate ohne Einkommen bei diesem Konsum, eine Nachkommastelle',
+          description: 'Monate ohne Einkommen bei diesem Abfluss, eine Nachkommastelle',
           example: 7.4,
         }),
       })

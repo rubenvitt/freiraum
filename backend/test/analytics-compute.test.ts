@@ -257,8 +257,26 @@ describe('Runway', () => {
     expect(runway(data, pots, 600_000, '2026-03-15')).toEqual({
       cashCents: 600_000,
       averageMonthlyConsumptionCents: 150_000,
+      fixedContributionsCents: 0,
+      monthlyOutflowCents: 150_000,
       basedOnMonths: 2,
       months: 4,
+    })
+  })
+
+  it('rechnet feste Einzahlungen ins Gemeinsame als laufenden Abfluss mit', () => {
+    const data = [tx('2026-02-10', -100_000, 'essen')]
+    expect(runway(data, pots, 600_000, '2026-03-15', 50_000)).toMatchObject({
+      averageMonthlyConsumptionCents: 100_000,
+      fixedContributionsCents: 50_000,
+      monthlyOutflowCents: 150_000,
+      months: 4,
+    })
+    // Nur Einzahlungen, kein Konsum: Der Runway endet trotzdem.
+    expect(runway([salary('2026-02-01')], pots, 100_000, '2026-03-15', 50_000)).toMatchObject({
+      averageMonthlyConsumptionCents: 0,
+      monthlyOutflowCents: 50_000,
+      months: 2,
     })
   })
 

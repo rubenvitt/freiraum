@@ -413,6 +413,66 @@ describe('Einzahlungsregeln', () => {
       ).status,
     ).toBe(404)
   })
+
+  it('kürzt den privaten Runway nur um feste Einzahlungen', async () => {
+    const { a, b, sharedId } = await couple()
+    await salary(a, 300_000)
+    // Konsum im Vormonat (nicht zugeordnet zählt als ausgegeben): 50 000 je Monat.
+    await importInto(a.token, a.accountId, [
+      {
+        bookingDate: `${addMonthsTo(current, -1)}-10`,
+        amountCents: -50_000,
+        counterpartyName: 'Supermarkt Beispiel',
+        purpose: 'Einkauf',
+      },
+    ])
+    const put = (token: string, m: string, rule: Json) =>
+      request('PUT', `/v1/households/${sharedId}/contribution-rules/${m}`, rule, token)
+    const runway = async () =>
+      (
+        await body(
+          await request(
+            'GET',
+            `/v1/households/${a.householdId}/analytics/metrics`,
+            undefined,
+            a.token,
+          ),
+        )
+      ).runway as Json
+
+    // Geld 300 000 − 50 000 = 250 000 bei 50 000 Konsum im Monat
+    expect(await runway()).toEqual({
+      cashCents: 250_000,
+      averageMonthlyConsumptionCents: 50_000,
+      fixedContributionsCents: 0,
+      monthlyOutflowCents: 50_000,
+      basedOnMonths: 1,
+      months: 5,
+    })
+
+    // Prozent vom Netto fällt ohne Einkommen weg: kein Einfluss.
+    expect((await put(a.token, current, { kind: 'prozent', percentBp: 4_000 })).status).toBe(200)
+    expect(await runway()).toMatchObject({ fixedContributionsCents: 0, months: 5 })
+
+    // Feste 500 € laufen weiter: der Runway wird kürzer.
+    expect((await put(a.token, current, { kind: 'fest', amountCents: 50_000 })).status).toBe(200)
+    expect(await runway()).toMatchObject({
+      fixedContributionsCents: 50_000,
+      monthlyOutflowCents: 100_000,
+      months: 2.5,
+    })
+
+    // Es zählt die Regel, die jetzt gilt; die Regel der anderen Person zählt nicht.
+    expect((await put(a.token, next, { kind: 'fest', amountCents: 110_000 })).status).toBe(200)
+    expect((await put(b.token, current, { kind: 'fest', amountCents: 80_000 })).status).toBe(200)
+    expect(await runway()).toMatchObject({ fixedContributionsCents: 50_000, months: 2.5 })
+
+    // Im gemeinsamen Haushalt ist die Einzahlung kein Abfluss.
+    const shared = await body(
+      await request('GET', `/v1/households/${sharedId}/analytics/metrics`, undefined, a.token),
+    )
+    expect(shared.runway.fixedContributionsCents).toBe(0)
+  })
 })
 
 describe('Ausgleich', () => {
