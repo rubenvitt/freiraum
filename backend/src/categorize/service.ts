@@ -544,12 +544,25 @@ export class CategorizationService {
    * Vorschlag; ohne Treffer bleibt ein vorhandener LLM-Vorschlag stehen, ein veralteter
    * Regelvorschlag wird entfernt. Erwartet eine offene Transaktion (Konto bereits gesperrt
    * oder nicht nötig, weil die Buchungen frisch sind).
+   *
+   * Buchungen über 0 Cent (etwa ein Kontoabschluss ohne Entgelt) haben nichts zuzuordnen: Sie
+   * gelten ohne Aufteilung gleich als bestätigt, damit sie den Monatsabschluss nicht aufhalten.
+   * Eine Aufteilung über 0 Cent ließe die Datenbank ohnehin nicht zu.
    */
   async applyRules(tx: TransactionSql, transactionIds: string[], asOf: IsoDate): Promise<number> {
     // Vor dem Budgetbeginn braucht es keine Vorschläge.
-    const rows = (await this.loadTransactions(tx, transactionIds)).filter(
+    const open = (await this.loadTransactions(tx, transactionIds)).filter(
       (t) => t.status !== 'bestaetigt' && t.in_budget === true,
     )
+    const zero = open.filter((t) => cents(t.amount_cents) === 0).map((t) => t.id)
+    if (zero.length > 0) {
+      await tx`delete from transaction_suggestions where transaction_id = any(${zero}::uuid[])`
+      await tx`
+        update transactions set status = 'bestaetigt', confirmed_by = null, confirmed_at = now()
+        where id = any(${zero}::uuid[])
+      `
+    }
+    const rows = open.filter((t) => cents(t.amount_cents) !== 0)
     const rulesByHousehold = new Map<string, Rule[]>()
     const touched: TxRow[] = []
     let suggested = 0
@@ -667,7 +680,7 @@ export class CategorizationService {
         select t.id from transactions t
         join accounts a on a.id = t.account_id
         join households h on h.id = a.household_id
-        where t.status = 'importiert' and t.llm_checked_at is null
+        where t.status = 'importiert' and t.llm_checked_at is null and t.amount_cents <> 0
           and t.booking_date >= h.budget_start_month
           and t.created_at > now() - make_interval(days => ${options.withinDays ?? 7})
         order by t.created_at, t.id
@@ -702,7 +715,7 @@ export class CategorizationService {
       join accounts a on a.id = t.account_id
       join households h on h.id = a.household_id
       where t.id = any(${transactionIds}::uuid[])
-        and t.status = 'importiert' and t.llm_checked_at is null
+        and t.status = 'importiert' and t.llm_checked_at is null and t.amount_cents <> 0
         and t.booking_date >= h.budget_start_month
       order by a.household_id, t.booking_date, t.id
     `
@@ -896,6 +909,9 @@ export class CategorizationService {
       const amount = cents(t.amount_cents)
       if (splits.length === 0) {
         throw new ApiError(422, 'aufteilung_leer', 'Mindestens eine Aufteilung ist nötig.')
+      }
+      if (splits.some((s) => s.amountCents === 0)) {
+        throw new ApiError(422, 'aufteilung_null', 'Eine Aufteilung über 0 Cent ist nicht möglich.')
       }
       const total = splits.reduce((sum, s) => sum + s.amountCents, 0)
       if (total !== amount) {

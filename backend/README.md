@@ -122,8 +122,9 @@ Rechenregeln und Begründungen: [ADR 0006](../docs/adr/0006-paar-modell.md).
   jeder Person schuldet, zeigt `GET /v1/households/{id}/settlements`; von Hand verbucht wird per
   `POST` (nur die eigene Forderung).
 - **Freigaben** (`/v1/shares/{personId}/{scope}`): `erst_ich`, `ruecklagen`, `einzahlung_soll`,
-  `budget`. Kennzahlen (`GET /v1/persons/{id}/metrics/{JJJJ-MM}`) sind Anteile, keine Beträge;
-  `budget` öffnet nur das Lesen von Budget und Töpfen.
+  `budget`, `sparquote`. Kennzahlen (`GET /v1/persons/{id}/metrics/{JJJJ-MM}`) sind Anteile, keine
+  Beträge (die Sparquote als ganzer Prozentwert); `budget` öffnet nur das Lesen von Budget und
+  Töpfen.
 
 ## Auswertungen und Besitz (E5)
 
@@ -131,7 +132,8 @@ Definitionen und Schwellen: [ADR 0005](../docs/adr/0005-auswertungen.md). Alle A
 je Haushalt und nur für seine Mitglieder; Zeiträume als `from`/`to` (`JJJJ-MM`, höchstens 120
 Monate).
 
-- `GET /v1/households/{id}/analytics/metrics`: je Monat Einkommen, Konsum, Erst ich, Gespart,
+- `GET /v1/households/{id}/analytics/metrics`: je Monat Einkommen, Konsum, Erst ich, Einzahlungen
+  ins Gemeinsame, Gespart,
   **Sparquote**, **Fixkostenanteil**, **Alter des Geldes**; dazu **Runway** (Standard: letzte 12
   Monate). Anteile in Basispunkten (10 000 = 100 %).
 - `GET …/analytics/flow`: **Geldfluss** als Knoten und Kanten für ein Sankey (Standard: laufender

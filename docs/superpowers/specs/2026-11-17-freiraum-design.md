@@ -112,5 +112,5 @@ Das Repo ist öffentlich. Deshalb: keine echten Finanzdaten, Kontonamen oder Zug
 - ~~Backend-Sprache und Framework~~: TypeScript + Hono, siehe ADR 0001
 - ~~Bankanbieter~~: Enable Banking für alle Konten, siehe [ADR 0002](../../adr/0002-bankanbindung.md)
 - ~~Welches LLM für Vorschläge, lokal oder per API~~: OpenRouter, Modell per Konfiguration, siehe [ADR 0003](../../adr/0003-budget-kern.md)
-- Standard-Einzahlungsregel fürs Gemeinsame: gemeinsam absprechen und als Regel je Person eintragen (kein Standard im Code, ADR 0006)
-- Ausgleich mit der nächsten Einzahlung verrechnen statt zurückzuüberweisen: Vorschlag in ADR 0006 („Umgekehrter Ausgleich“), noch nicht umgesetzt
+- ~~Standard-Einzahlungsregel fürs Gemeinsame~~: keine im Code. Jede Person stellt ihre Regel selbst ein (fest oder Prozent vom Netto, Betrag bzw. Anteil, gültig ab einem frei wählbaren Monat), siehe [ADR 0006](../../adr/0006-paar-modell.md)
+- Ausgleich mit der nächsten Einzahlung verrechnen statt zurückzuüberweisen: Vorschlag in ADR 0006 („Umgekehrter Ausgleich“), noch nicht umgesetzt (FREI-28)

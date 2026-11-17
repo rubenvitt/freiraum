@@ -119,11 +119,13 @@ die Überweisungen im Alltag spart, entscheiden die beiden Personen; bis dahin b
 | `ruecklagen` | dasselbe für die Rücklagen |
 | `einzahlung_soll` | das Soll der eigenen Regel „Prozent vom Netto“ |
 | `budget` | Budget und Töpfe des privaten Haushalts lesen |
+| `sparquote` | die Sparquote des Monats als ganzer Prozentwert (ADR 0005), null ohne Einkommen |
 
 - Freigaben gibt es nur an die Person, mit der man einen Haushalt teilt. Geprüft wird bei jeder
   Anfrage; Zurücknehmen wirkt sofort.
-- **Kennzahlen sind Anteile, keine Beträge.** Aus „Erst ich zu 100 % erledigt“ lässt sich kein
-  Einkommen zurückrechnen.
+- **Kennzahlen sind Anteile, keine Beträge.** Aus „Erst ich zu 100 % erledigt“ oder einer
+  Sparquote von 30 % lässt sich kein Einkommen zurückrechnen. Die Sparquote kommt deshalb auf ganze
+  Prozent abgerundet, nicht in Basispunkten.
 - Das Soll einer Regel „Prozent vom Netto“ verrät das Einkommen. Ohne `einzahlung_soll` sieht die
   andere Person nur Regel und Ist. Ein fester Betrag ist ohnehin bekannt und immer sichtbar.
 - `budget` öffnet nur das **Lesen** von Budget und Töpfen. Buchungen, Konten, Regeln und jede
@@ -137,15 +139,15 @@ die Überweisungen im Alltag spart, entscheiden die beiden Personen; bis dahin b
 - Budgetbeginn (ADR 0003): Einzahlungen vor dem Startmonat zählen nicht im Budget, und vorher gibt
   es auch keinen Abgleich (wie bei allen Vorschlägen). Soll/Ist der Einzahlungen und der Ausgleich
   sind Forderungen zwischen den Personen und rechnen unabhängig davon.
-- Die Sparquote ist seit E5 definiert ([ADR 0005](0005-auswertungen.md)), als Freigabe aber noch
-  nicht ergänzt.
+- Die Sparquote ([ADR 0005](0005-auswertungen.md)) ist seit FREI-19 als Freigabe `sparquote`
+  ergänzt (Migration 0007). Einzahlungen ins Gemeinsame mindern die private Sparquote.
 - Ausgaben vom gemeinsamen Konto für einen privaten Topf (umgekehrter Ausgleich) sind seit
-  FREI-18 umgesetzt (Migration 0007). Das Verrechnen eines Ausgleichs mit der nächsten Einzahlung
-  ist als Vorschlag beschrieben, aber nicht umgesetzt.
+  FREI-18 umgesetzt (Migration 0008). Das Verrechnen eines Ausgleichs mit der nächsten Einzahlung
+  ist als Vorschlag beschrieben, aber nicht umgesetzt (FREI-28).
 - Die Auswertungen rechnen weiter je Haushalt der Konten. Ausgaben über Haushaltsgrenzen
   (gemeinsamer Topf vom privaten Konto und umgekehrt) erscheinen dort beim Konto, nicht beim
   Topf; das gehört zu den Auswertungen über Haushalte hinweg (FREI-22).
 - Das LLM bekommt weiterhin nur die Töpfe des Haushalts, zu dem das Konto gehört, also keine
   gemeinsamen Töpfe bei privaten Konten. Ob das reicht, zeigt der Alltag.
-- Welche Einzahlungsregel gilt, legen die beiden Personen gemeinsam fest; die Spec führt das
-  weiter unter „Offene Entscheidungen“.
+- Welche Einzahlungsregel gilt, legen die beiden Personen gemeinsam fest und tragen sie als Daten
+  ein (Art, Betrag bzw. Anteil, Startmonat). Freiraum gibt dafür nichts vor.
