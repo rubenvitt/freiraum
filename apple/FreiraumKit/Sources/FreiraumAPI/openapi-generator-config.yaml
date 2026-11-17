@@ -1,0 +1,6 @@
+# Erzeugt den Swift-Client aus dem API-Vertrag (openapi.yaml ist ein Verweis auf /openapi/openapi.yaml).
+generate:
+  - types
+  - client
+accessModifier: public
+namingStrategy: idiomatic

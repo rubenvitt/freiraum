@@ -2,7 +2,7 @@ import { createRoute, type OpenAPIHono, z } from '@hono/zod-openapi'
 import type { AppEnv } from '../app.js'
 import { requireAuth } from '../auth/middleware.js'
 import type { Rule } from '../categorize/rules.js'
-import { Cents, error, json, pathId } from './common.js'
+import { Cents, error, IsoDate, json, pathId } from './common.js'
 import { SplitInputSchema, SplitKind, TransactionSchema } from './ledger.js'
 
 const Iban = z
@@ -194,6 +194,47 @@ const deleteRule = createRoute({
   },
 })
 
+const recordCashExpense = createRoute({
+  method: 'post',
+  path: '/v1/accounts/{accountId}/cash-expenses',
+  tags: ['Konten'],
+  summary: 'Barausgabe erfassen',
+  description:
+    'Legt im Bargeldkonto eine bestätigte Ausgabe an, gleich einem Topf aus dem Haushalt des ' +
+    'Kontos zugeordnet. Idempotent über clientId: Ein zweiter Aufruf mit derselben clientId legt ' +
+    'nichts an und liefert die vorhandene Buchung (200). Es entsteht keine Regel.',
+  security: [{ bearerAuth: [] }],
+  middleware: [requireAuth] as const,
+  request: {
+    params: z.object({ accountId: pathId('accountId') }),
+    body: json(
+      z.object({
+        clientId: z.uuid().openapi({
+          description: 'Von der App je Eingabe einmal erzeugt, schützt vor doppelten Buchungen',
+        }),
+        bookingDate: IsoDate,
+        amountCents: z.number().int().min(1).max(100_000_000).openapi({
+          description: 'Ausgegebener Betrag in Cent, positiv (wird als Ausgang gebucht)',
+          example: 450,
+        }),
+        description: z.string().trim().max(300).optional().openapi({
+          description: 'Wofür oder wo, z. B. „Bäcker“',
+        }),
+        potId: z.uuid(),
+      }),
+      'Barausgabe',
+    ),
+  },
+  responses: {
+    201: json(TransactionSchema, 'Barausgabe erfasst'),
+    200: json(TransactionSchema, 'Schon erfasst (gleiche clientId)'),
+    400: error('Ungültige Anfrage'),
+    401: error('Nicht angemeldet'),
+    404: error('Konto nicht gefunden (oder kein Zugriff)'),
+    422: error('Kein Bargeldkonto, Topf aus anderem Haushalt oder archiviert'),
+  },
+})
+
 const ruleJson = (r: Rule) => ({
   ...r,
   createdAt: r.createdAt.toISOString(),
@@ -238,6 +279,18 @@ export function categorizeRoutes(app: OpenAPIHono<AppEnv>): void {
       },
       200,
     )
+  })
+
+  app.openapi(recordCashExpense, async (c) => {
+    const { accountId } = c.req.valid('param')
+    const result = await c.var.categorize.recordCashExpense(
+      c.var.session.person.id,
+      accountId,
+      c.req.valid('json'),
+    )
+    const [transaction] = await c.var.ledger.transactionsByIds([result.transactionId])
+    if (!transaction) throw new Error('Barausgabe nach dem Erfassen nicht gefunden')
+    return c.json(transaction, result.created ? 201 : 200)
   })
 
   app.openapi(listRules, async (c) => {

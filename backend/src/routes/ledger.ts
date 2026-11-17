@@ -100,7 +100,11 @@ export const SplitSchema = z
   .openapi('Split')
 
 export const SplitInputSchema = SplitSchema.extend({
-  potId: z.uuid().nullable().default(null).openapi({ description: 'nur bei kind = topf' }),
+  potId: z
+    .uuid()
+    .nullable()
+    .default(null)
+    .openapi({ description: 'nur bei kind = topf; fehlt = null' }),
   personId: SplitPersonId.default(null),
 }).openapi('SplitInput')
 

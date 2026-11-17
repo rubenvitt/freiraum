@@ -1,4 +1,5 @@
 import { OpenAPIHono } from '@hono/zod-openapi'
+import { AnalyticsService } from './analytics/service.js'
 import type { Person } from './auth/service.js'
 import { AuthService } from './auth/service.js'
 import { BudgetService } from './budget/service.js'
@@ -10,6 +11,7 @@ import { CoupleService } from './couple/service.js'
 import type { Db } from './db/client.js'
 import { ApiError } from './errors.js'
 import { type ImportHooks, LedgerService } from './ledger/service.js'
+import { analyticsRoutes } from './routes/analytics.js'
 import { authRoutes } from './routes/auth.js'
 import { budgetRoutes } from './routes/budget.js'
 import { categorizeRoutes } from './routes/categorize.js'
@@ -22,6 +24,7 @@ export const API_VERSION = '0.1.0'
 
 export type AppEnv = {
   Variables: {
+    analytics: AnalyticsService
     auth: AuthService
     budget: BudgetService
     categorize: CategorizationService
@@ -59,6 +62,7 @@ export function createApp(deps: { db: Db; config: Config; llm?: LlmCategorizer |
   const budget = new BudgetService(deps.db, suggest)
   const categorize = new CategorizationService(deps.db, budget, llm)
   const couple = new CoupleService(deps.db, budget)
+  const analytics = new AnalyticsService(deps.db, budget)
   const ledger = new LedgerService(deps.db, suggest)
 
   const app = new OpenAPIHono<AppEnv>({
@@ -78,6 +82,7 @@ export function createApp(deps: { db: Db; config: Config; llm?: LlmCategorizer |
   })
 
   app.use(async (c, next) => {
+    c.set('analytics', analytics)
     c.set('auth', auth)
     c.set('budget', budget)
     c.set('categorize', categorize)
@@ -110,11 +115,12 @@ export function createApp(deps: { db: Db; config: Config; llm?: LlmCategorizer |
   budgetRoutes(app)
   categorizeRoutes(app)
   coupleRoutes(app)
+  analyticsRoutes(app)
   webRoutes(app)
 
   app.doc31('/openapi.json', openApiInfo)
 
-  return { app, auth, budget, categorize, couple, ledger }
+  return { app, analytics, auth, budget, categorize, couple, ledger }
 }
 
 export const openApiInfo = {

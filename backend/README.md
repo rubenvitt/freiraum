@@ -122,3 +122,19 @@ Rechenregeln und Begründungen: [ADR 0004](../docs/adr/0004-paar-modell.md).
 - **Freigaben** (`/v1/shares/{personId}/{scope}`): `erst_ich`, `ruecklagen`, `einzahlung_soll`,
   `budget`. Kennzahlen (`GET /v1/persons/{id}/metrics/{JJJJ-MM}`) sind Anteile, keine Beträge;
   `budget` öffnet nur das Lesen von Budget und Töpfen.
+
+## Auswertungen und Besitz (E5)
+
+Definitionen und Schwellen: [ADR 0005](../docs/adr/0005-auswertungen.md). Alle Auswertungen gelten
+je Haushalt und nur für seine Mitglieder; Zeiträume als `from`/`to` (`JJJJ-MM`, höchstens 120
+Monate).
+
+- `GET /v1/households/{id}/analytics/metrics`: je Monat Einkommen, Konsum, Erst ich, Gespart,
+  **Sparquote**, **Fixkostenanteil**, **Alter des Geldes**; dazu **Runway** (Standard: letzte 12
+  Monate). Anteile in Basispunkten (10 000 = 100 %).
+- `GET …/analytics/flow`: **Geldfluss** als Knoten und Kanten für ein Sankey (Standard: laufender
+  Monat).
+- `GET …/analytics/anomalies?month=`: hohe Ausgaben, neue Abos, Preiserhöhungen.
+- `GET …/analytics/goals`: **Ziele** mit Sparrate und Prognose des Erreichens.
+- **Besitz** (`/v1/households/{id}/assets`, `/v1/assets/{id}`): Name, optional Wert und die Töpfe
+  mit den laufenden Kosten. `GET …/analytics/ownership-costs` zeigt, was er kostet.

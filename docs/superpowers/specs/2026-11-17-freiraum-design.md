@@ -30,7 +30,7 @@ Beide Personen nutzen iPhones, deshalb ist Web nicht Teil des ersten Wurfs.
 
 ### Technik
 
-Festgelegt in [ADR 0001](../../adr/0001-technik-grundgeruest.md) (E0, FREI-1). Ursprünglicher Vorschlag:
+Festgelegt in [ADR 0001](../../adr/0001-technik-grundgeruest.md) (E0, FREI-1), für die Apps in [ADR 0004](../../adr/0004-ios-app.md) (E3, FREI-4). Ursprünglicher Vorschlag:
 
 - Backend: TypeScript (z. B. Hono) + PostgreSQL, als Container auf dem Homelab (ARM64).
 - API-Vertrag: OpenAPI als Quelle der Wahrheit; Swift-Client per `swift-openapi-generator`, Web-Client generiert.
@@ -78,7 +78,7 @@ Kriterien: alle eigenen Banken abgedeckt, Kosten, Aufwand der regelmäßigen Zus
 1. Regeln greifen zuerst.
 2. Ohne Treffer schlägt ein LLM Topf und Haushalt vor, mit Begründung.
 3. Die Person bestätigt auf dem iPhone mit einem Tipp; Korrekturen werden zu neuen Regeln.
-4. Bargeld: Abhebung wird als „Bargeld, noch nicht erfasst“ markiert, bis Barausgaben dagegen gebucht sind.
+4. Bargeld: Abhebung wird als „Bargeld, noch nicht erfasst“ markiert, bis Barausgaben dagegen gebucht sind. Stand E3: Abhebung als Umbuchung zuordnen, Barausgaben im Bargeldkonto erfassen (ADR 0004); den offenen Bestand zeigt die App noch nicht.
 
 ## Auswertungen
 
@@ -90,6 +90,8 @@ Kriterien: alle eigenen Banken abgedeckt, Kosten, Aufwand der regelmäßigen Zus
 - Auffälligkeiten (Abweichung vom Schnitt, neue Abos)
 - Ziele mit Prognose des Erreichens
 - Besitzkosten („Was kostet mich mein Besitz?“)
+
+Definitionen, Schwellen und das Datenmodell für Besitz: [ADR 0005](../../adr/0005-auswertungen.md).
 
 ## Etappen
 
