@@ -39,6 +39,11 @@ pnpm dev
 | `INVITATION_TTL_HOURS` | nein | `72` | Gültigkeit einer Einladung |
 | `MIGRATE_ON_START` | nein | `true` | Migrationen beim Start anwenden |
 | `PORT` | nein | `3000` | HTTP-Port |
+| `LLM_API_KEY` | nein | | Schlüssel für OpenRouter; ohne ihn bleibt das LLM aus (nur Regeln schlagen vor) |
+| `LLM_MODEL` | mit Schlüssel | | Modell, z. B. `anbieter/modell`; es muss strukturierte Ausgabe (JSON-Schema) können |
+| `LLM_BASE_URL` | nein | `https://openrouter.ai/api/v1` | andere OpenAI-kompatible Schnittstelle, etwa ein lokales Modell |
+| `LLM_TIMEOUT_MS` | nein | `20000` | Zeitlimit je Anfrage |
+| `LLM_ZDR` | nein | `true` | bei OpenRouter nur Anbieter ohne Datenspeicherung (Zero Data Retention) |
 
 ## Anmeldung (Ablauf)
 
@@ -88,4 +93,7 @@ Rechenregeln und Begründungen: [ADR 0003](../docs/adr/0003-budget-kern.md).
   was auf Bestätigung wartet; `POST /v1/transactions/{id}/confirm` bestätigt mit einem Tipp,
   `PUT /v1/transactions/{id}/splits` korrigiert oder teilt auf. Eine Korrektur wird zur Regel
   (`/v1/households/{id}/rules`) und schlägt offene Buchungen neu vor.
-- Ein LLM ist noch nicht angebunden (`src/categorize/llm.ts` ist die Schnittstelle).
+- **LLM-Vorschläge** über OpenRouter, sobald `LLM_API_KEY` und `LLM_MODEL` gesetzt sind. Das
+  Modell sieht Datum, Betrag, Gegenpartei-Name, Verwendungszweck (IBANs maskiert) und die Töpfe
+  des Haushalts, sonst nichts. Ist es nicht erreichbar, holt der Server die Vorschläge alle 15
+  Minuten nach. Details und Abwägung: ADR 0003.

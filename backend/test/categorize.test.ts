@@ -1,13 +1,16 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import type { LlmCategorizer, LlmRequest, LlmSuggestion } from '../src/categorize/llm.js'
+import { OpenRouterCategorizer } from '../src/categorize/openrouter.js'
 import { bestRule, criteriaFromCorrection, matches, type Rule } from '../src/categorize/rules.js'
+import { LLM_MAX_FAILURES_IN_ROW, maskIbans } from '../src/categorize/service.js'
 import { setupTestApp } from './helpers/app.js'
 
 // Alle Namen, Beträge und IBANs sind erfunden.
 
 /** LLM-Ersatz: merkt sich die Anfragen und antwortet, was der Test vorgibt. */
 const llmCalls: LlmRequest[] = []
-let llmAnswer: (req: LlmRequest) => LlmSuggestion | null = () => null
+let llmAnswer: (req: LlmRequest) => LlmSuggestion | null | Promise<LlmSuggestion | null> = () =>
+  null
 const fakeLlm: LlmCategorizer = {
   async suggest(req) {
     llmCalls.push(req)
@@ -15,7 +18,9 @@ const fakeLlm: LlmCategorizer = {
   },
 }
 
-const { db, ledger, request, reset, personWithSession } = setupTestApp({ llm: fakeLlm })
+const { db, categorize, ledger, request, reset, personWithSession } = setupTestApp({
+  llm: fakeLlm,
+})
 
 afterAll(() => db.end())
 beforeEach(async () => {
@@ -450,6 +455,100 @@ describe('LLM-Vorschläge', () => {
     expect(llmCalls).toHaveLength(1)
   })
 
+  it('schickt keine IBAN aus dem Verwendungszweck', async () => {
+    const a = await setup()
+    await importInto(a.token, a.accountId, [
+      {
+        bookingDate: '2026-11-03',
+        amountCents: -80_000,
+        counterpartyName: 'Vermieterin Beispiel',
+        purpose: 'Miete November IBAN DE89 3704 0044 0532 0130 00 BIC COBADEFFXXX',
+      },
+    ])
+    expect(llmCalls[0]?.transaction.purpose).toBe('Miete November IBAN [IBAN] BIC COBADEFFXXX')
+  })
+
+  it('holt Vorschläge nach, wenn das Modell nicht erreichbar war', async () => {
+    const a = await setup()
+    await pot(a.token, a.householdId, 'Lebensmittel')
+    llmAnswer = () => {
+      throw new Error('Zeitüberschreitung')
+    }
+    const res = await importInto(a.token, a.accountId, [grocery('2026-11-02')])
+    expect(res.status).toBe(201)
+    expect(llmCalls).toHaveLength(1)
+    const [before] = await pending(a.token)
+    expect(before).toMatchObject({ status: 'importiert', suggestion: null })
+
+    llmAnswer = (req) => ({
+      kind: 'topf',
+      potId: req.options.find((o) => o.label === 'Lebensmittel')?.potId ?? null,
+      confidencePct: 70,
+      reason: 'Supermarkt.',
+    })
+    expect(await categorize.retryLlmSuggestions()).toBe(1)
+    const [after] = await pending(a.token)
+    expect(after).toMatchObject({ status: 'vorgeschlagen', suggestion: { source: 'llm' } })
+    // Einmal beantwortet: kein weiterer Aufruf beim nächsten Nachholen.
+    expect(await categorize.retryLlmSuggestions()).toBe(0)
+    expect(llmCalls).toHaveLength(2)
+  })
+
+  it('bricht nach mehreren Fehlern in Folge ab, statt jede Buchung zu versuchen', async () => {
+    const a = await setup()
+    llmAnswer = () => {
+      throw new Error('HTTP 503')
+    }
+    const res = await importInto(
+      a.token,
+      a.accountId,
+      Array.from({ length: 10 }, (_, i) => grocery(`2026-11-${String(i + 1).padStart(2, '0')}`)),
+    )
+    expect(res.status).toBe(201)
+    expect((await body(res)).imported).toBe(10)
+    expect(llmCalls).toHaveLength(LLM_MAX_FAILURES_IN_ROW)
+  })
+
+  it('funktioniert mit dem OpenRouter-Adapter von Anfang bis Ende', async () => {
+    const a = await setup()
+    const essen = await pot(a.token, a.householdId, 'Lebensmittel')
+    const sent: string[] = []
+    const adapter = new OpenRouterCategorizer(
+      {
+        baseUrl: 'https://openrouter.ai/api/v1',
+        apiKey: 'sk-test',
+        model: 'beispiel/modell',
+        timeoutMs: 1_000,
+        zeroDataRetention: true,
+      },
+      {
+        fetch: async (_url, init) => {
+          sent.push(String(init?.body))
+          // o1 Einnahme, o2 Umbuchung, o3 Lebensmittel
+          const content = JSON.stringify({
+            option: 'o3',
+            confidence_pct: 77,
+            reason: 'Einkauf im Supermarkt.',
+          })
+          return Response.json({ choices: [{ message: { content } }] })
+        },
+      },
+    )
+    llmAnswer = (req) => adapter.suggest(req)
+    await importInto(a.token, a.accountId, [
+      { ...grocery('2026-11-02'), counterpartyIban: 'DE02120300000000202051' },
+    ])
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).not.toContain('DE02')
+    expect(sent[0]).not.toContain(essen)
+    const [t] = await pending(a.token)
+    expect(t).toMatchObject({
+      status: 'vorgeschlagen',
+      splits: [{ kind: 'topf', potId: essen, amountCents: -4_250 }],
+      suggestion: { source: 'llm', confidencePct: 77, reason: 'Einkauf im Supermarkt.' },
+    })
+  })
+
   it('überlässt Regeltreffer nicht dem LLM', async () => {
     const a = await setup()
     await request(
@@ -462,5 +561,15 @@ describe('LLM-Vorschläge', () => {
     expect(llmCalls).toHaveLength(0)
     const [t] = await pending(a.token)
     expect(t?.suggestion.source).toBe('regel')
+  })
+})
+
+describe('IBANs maskieren', () => {
+  it('erkennt IBANs mit und ohne Leerzeichen und lässt anderes stehen', () => {
+    expect(maskIbans('DE89370400440532013000')).toBe('[IBAN]')
+    expect(maskIbans('an AT61 1904 3002 3457 3201 Danke')).toBe('an [IBAN] Danke')
+    expect(maskIbans('Rechnung RE-2026-0042 vom 03.11.')).toBe('Rechnung RE-2026-0042 vom 03.11.')
+    expect(maskIbans('KARTE 1234 EUR 12,50')).toBe('KARTE 1234 EUR 12,50')
+    expect(maskIbans(null)).toBeNull()
   })
 })

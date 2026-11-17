@@ -109,5 +109,5 @@ Das Repo ist öffentlich. Deshalb: keine echten Finanzdaten, Kontonamen oder Zug
 
 - ~~Backend-Sprache und Framework~~: TypeScript + Hono, siehe ADR 0001
 - ~~Bankanbieter~~: Enable Banking für alle Konten, siehe [ADR 0002](../../adr/0002-bankanbindung.md)
-- Welches LLM für Vorschläge, lokal oder per API
+- ~~Welches LLM für Vorschläge, lokal oder per API~~: OpenRouter, Modell per Konfiguration, siehe [ADR 0003](../../adr/0003-budget-kern.md)
 - Standard-Einzahlungsregel fürs Gemeinsame

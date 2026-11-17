@@ -3,6 +3,7 @@ import type { Person } from './auth/service.js'
 import { AuthService } from './auth/service.js'
 import { BudgetService } from './budget/service.js'
 import type { LlmCategorizer } from './categorize/llm.js'
+import { OpenRouterCategorizer } from './categorize/openrouter.js'
 import { CategorizationService } from './categorize/service.js'
 import type { Config } from './config.js'
 import type { Db } from './db/client.js'
@@ -30,10 +31,20 @@ export type AppEnv = {
 
 const errorBody = (code: string, message: string) => ({ error: { code, message } })
 
+/**
+ * `llm` ersetzt das LLM aus der Konfiguration (Tests); ohne Angabe gilt `config.llm`, und ohne
+ * Konfiguration bleibt das LLM aus.
+ */
 export function createApp(deps: { db: Db; config: Config; llm?: LlmCategorizer | null }) {
+  const llm =
+    deps.llm !== undefined
+      ? deps.llm
+      : deps.config.llm
+        ? new OpenRouterCategorizer(deps.config.llm)
+        : null
   const auth = new AuthService(deps.db, deps.config)
   const budget = new BudgetService(deps.db)
-  const categorize = new CategorizationService(deps.db, budget, deps.llm ?? null)
+  const categorize = new CategorizationService(deps.db, budget, llm)
   const ledger = new LedgerService(deps.db, {
     // Regeln in der Import-Transaktion, LLM danach (Netzwerk, ohne offene Transaktion).
     inTransaction: async (tx, ids, asOf) => {

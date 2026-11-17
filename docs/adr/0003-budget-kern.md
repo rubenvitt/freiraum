@@ -82,9 +82,27 @@ Abgeschlossene Monate rührt sie nicht an.
   gesetzten Merkmale müssen passen; es gewinnt die spezifischste Regel, bei Gleichstand die
   zuletzt geänderte.
 - **Ohne Treffer fragt ein LLM** (falls angebunden) mit Datum, Betrag, Gegenpartei-Name und
-  Verwendungszweck, **ohne IBAN**, und bekommt nur die Töpfe des Haushalts, zu dem das Konto
-  gehört. Antworten mit unbekanntem Topf werden verworfen. Jede Buchung wird höchstens einmal
-  gefragt. Der Aufruf läuft nach dem Commit des Imports, nie in einer offenen Transaktion.
+  Verwendungszweck, **ohne IBAN** (auch IBANs im Verwendungszweck werden vorher maskiert), und
+  bekommt nur die Töpfe des Haushalts, zu dem das Konto gehört. Antworten mit unbekanntem Topf
+  werden verworfen. Jede Buchung wird höchstens einmal beantwortet. Der Aufruf läuft nach dem
+  Commit des Imports, nie in einer offenen Transaktion.
+- **Modell über OpenRouter** (Entscheidung 17.11.2026, FREI-14). Der Adapter
+  (`backend/src/categorize/openrouter.ts`) spricht die OpenAI-kompatible Chat-Completions-
+  Schnittstelle mit JSON-Schema (Option, Konfidenz 0–100, Begründung in einem Satz). Das Modell
+  wählt aus kurzen Kennungen (`o1`, `o2`, …), Topf-IDs verlassen den Server nicht. Jede Anfrage
+  verlangt Anbieter ohne Datenspeicherung (`provider.data_collection: deny`, standardmäßig auch
+  `zdr`) und mit Unterstützung aller Parameter. Welches Modell, legt `LLM_MODEL` fest; die
+  Basis-URL ist austauschbar, ein lokales Modell mit derselben Schnittstelle ginge ohne
+  Codeänderung. Ohne `LLM_API_KEY` bleibt das LLM aus.
+  - Abgewogen: Ein lokales Modell hielte die Daten im Homelab, braucht aber passende Hardware und
+    liefert bei deutschen Verwendungszwecken schwächere Ergebnisse. Über OpenRouter verlassen
+    Gegenpartei und Verwendungszweck das Homelab, dafür gibt es gute Modelle für Cent-Beträge und
+    die Wahl lässt sich ohne Code ändern.
+- **Ausfall des Modells hält nichts auf.** Fehler und Zeitüberschreitung (`LLM_TIMEOUT_MS`)
+  lassen die Buchung `importiert` und ungefragt; nach drei Fehlern in Folge bricht der Lauf ab.
+  Der Server holt solche Buchungen alle 15 Minuten nach (nur die der letzten 7 Tage, damit das
+  Einschalten des LLM nicht die ganze Historie abfragt). Eine unbrauchbare Antwort gilt dagegen
+  als beantwortet.
 - **Vorschläge zählen sofort im Budget.** Ein Vorschlag legt gleich die Aufteilung an (Status
   `vorgeschlagen`). Sonst stünde das Gehalt erst nach der Bestätigung in „Noch ohne Aufgabe“,
   und die Erst-ich-Automatik liefe nicht „nach jedem Gehaltseingang“. Die Bestätigung ist ein
@@ -106,7 +124,7 @@ Töpfe kommen immer aus dem Haushalt des Kontos. Eine private Ausgabe für einen
   in „Noch ohne Aufgabe“, und die Automatik füllt alte Monate. Vor dem echten Einsatz braucht
   jeder Haushalt einen Startmonat mit Anfangsbestand (Folgeaufgabe, hängt an den Kontoständen
   aus FREI-12).
-- Das LLM ist nur eine Schnittstelle (`backend/src/categorize/llm.ts`). Welches Modell, lokal oder
-  per API, bleibt offen (Spec, „Offene Entscheidungen“).
+- Das LLM fragt je Buchung einzeln und nacheinander, der Import wartet darauf. Bei großen
+  Importen dauert das; gebündelte Anfragen oder ein Lauf im Hintergrund sind eine Folgeaufgabe.
 - Der zeitgesteuerte Abruf (FREI-12) bekommt Kategorisierung und Erst-ich ohne Zusatzarbeit, weil
   sie an `LedgerService.importTransactions` hängen.
