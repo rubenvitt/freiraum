@@ -5,4 +5,11 @@ Persönliches Finanz-Cockpit für Paare: Budget nach dem Topf-Prinzip, getrennte
 - Spec: [`docs/superpowers/specs/2026-11-17-freiraum-design.md`](docs/superpowers/specs/2026-11-17-freiraum-design.md)
 - Plattformen: Backend (selbst gehostet), iOS und macOS (SwiftUI), später Web
 
-Status: Konzeptphase.
+## Aufbau
+
+- `backend/`: API-Server (TypeScript, Hono, PostgreSQL), siehe [`backend/README.md`](backend/README.md)
+- `openapi/openapi.yaml`: API-Vertrag für alle Clients (aus dem Backend erzeugt)
+- `deploy/`: Compose-Datei und Anleitung fürs Homelab
+- `docs/adr/`: Architekturentscheidungen
+
+Status: E0 Grundgerüst (Backend-Skelett, Anmeldung per Passkey).

@@ -1,0 +1,36 @@
+# Freiraum auf dem Homelab. Werte kommen aus deploy/.env (Vorlage: .env.example).
+# TLS übernimmt der vorhandene Reverse Proxy; Passkeys brauchen HTTPS auf WEBAUTHN_RP_ID.
+name: freiraum
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: freiraum
+      POSTGRES_USER: freiraum
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD fehlt}
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U freiraum -d freiraum"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    image: ${FREIRAUM_IMAGE:-ghcr.io/rubenvitt/freiraum-backend:main}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://freiraum:${POSTGRES_PASSWORD}@db:5432/freiraum
+      WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:?WEBAUTHN_RP_ID fehlt}
+      WEBAUTHN_ORIGINS: ${WEBAUTHN_ORIGINS:-}
+      APPLE_APP_IDS: ${APPLE_APP_IDS:-}
+    ports:
+      - "${FREIRAUM_BIND:-127.0.0.1}:${FREIRAUM_PORT:-3000}:3000"
+
+volumes:
+  db:
