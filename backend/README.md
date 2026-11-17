@@ -47,6 +47,10 @@ pnpm dev
 3. Später: `POST /v1/auth/login/options` → `POST /v1/auth/login/verify` → Sitzung
 4. Alle weiteren Aufrufe mit `Authorization: Bearer <token>`
 
+Ohne App geht Schritt 1–2 im Browser unter `/registrieren` (statische Seite aus `public/`, ohne
+Build-Schritt, strenge CSP, nicht Teil des OpenAPI-Vertrags). Die Seite hat auch „Anmelden
+testen“ (Schritt 3 plus `GET /v1/me`). Ablauf im Betrieb: [`deploy/README.md`](../deploy/README.md).
+
 Den vollständigen Vertrag beschreibt [`openapi/openapi.yaml`](../openapi/openapi.yaml).
 
 ## Haushalte, Konten, Import (E1)

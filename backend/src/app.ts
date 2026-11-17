@@ -13,6 +13,7 @@ import { budgetRoutes } from './routes/budget.js'
 import { categorizeRoutes } from './routes/categorize.js'
 import { healthRoutes } from './routes/health.js'
 import { ledgerRoutes } from './routes/ledger.js'
+import { webRoutes } from './routes/web.js'
 
 export const API_VERSION = '0.1.0'
 
@@ -90,6 +91,7 @@ export function createApp(deps: { db: Db; config: Config; llm?: LlmCategorizer |
   ledgerRoutes(app)
   budgetRoutes(app)
   categorizeRoutes(app)
+  webRoutes(app)
 
   app.doc31('/openapi.json', openApiInfo)
 
