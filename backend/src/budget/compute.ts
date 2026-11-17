@@ -11,7 +11,7 @@
  * - Budgetbeginn: Daten vor dem Startmonat zählen nicht. Der Anfangsbestand (Summe der
  *   Kontostände zum Start) kommt im Startmonat in „Noch ohne Aufgabe“, ist aber keine Einnahme
  *   des Monats (zählt also nicht für Erst-ich-Anteile).
- * - Einzahlungen ins Gemeinsame (ADR 0004) zählen nicht als negative Einnahme: Der Erst-ich-Anteil
+ * - Einzahlungen ins Gemeinsame (ADR 0006) zählen nicht als negative Einnahme: Der Erst-ich-Anteil
  *   rechnet mit den vollen Einnahmen („erst sich selbst bezahlen, dann andere“).
  */
 import { addMonthsTo, type Month, maxMonth, minMonth, monthsBetween } from './months.js'

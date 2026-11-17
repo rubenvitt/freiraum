@@ -4,7 +4,7 @@
  * Zugriff wird hier durchgesetzt: Nur Mitglieder eines Haushalts sehen und ändern seine Töpfe
  * und sein Budget. Fremde Haushalte und Töpfe sind „nicht gefunden“ (404). Einzige Ausnahme:
  * Hat die Inhaberin eines privaten Haushalts der anderen Person die Sicht `budget` freigegeben
- * (ADR 0004), darf diese Töpfe und Budget lesen, aber nichts ändern.
+ * (ADR 0006), darf diese Töpfe und Budget lesen, aber nichts ändern.
  *
  * Schreibende Vorgänge sperren die Haushaltszeile (`for update`), damit die Prüfung von
  * „Noch ohne Aufgabe ≥ 0“ nicht durch parallele Änderungen unterlaufen wird. Sperrreihenfolge
@@ -378,7 +378,7 @@ export class BudgetService {
       group by 1, 2
     `
     // Einnahmen; im Gemeinsamen zählen Einzahlungen der Personen dazu (positiv). Einzahlungen
-    // von privaten Konten (negativ) mindern „Noch ohne Aufgabe“ getrennt (ADR 0004).
+    // von privaten Konten (negativ) mindern „Noch ohne Aufgabe“ getrennt (ADR 0006).
     const inflows = await sql<{ month: string; amount_cents: string }[]>`
       select to_char(t.booking_date, 'YYYY-MM') as month, sum(s.amount_cents) as amount_cents
       from transaction_splits s

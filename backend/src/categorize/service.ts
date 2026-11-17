@@ -5,7 +5,7 @@
  *
  * Zugriff: nur Mitglieder des Haushalts, zu dem das Konto gehört. Töpfe kommen aus dem Haushalt
  * des Kontos; ein privates Konto darf zusätzlich Töpfe des gemeinsamen Haushalts verwenden, in
- * dem die Inhaberin Mitglied ist (daraus entsteht ein Ausgleich, ADR 0004). Die Datenbank prüft
+ * dem die Inhaberin Mitglied ist (daraus entsteht ein Ausgleich, ADR 0006). Die Datenbank prüft
  * das zusätzlich.
  *
  * Überweisungen zwischen eigenen Konten erkennt der Abgleich über die IBAN (Umbuchung,
@@ -994,7 +994,7 @@ export class CategorizationService {
       if (existing) return { transactionId: existing.id, created: false }
 
       // Wie bei Bankbuchungen darf ein privates Bargeldkonto auch einen gemeinsamen Topf
-      // verwenden; daraus entsteht ein Ausgleich (ADR 0004).
+      // verwenden; daraus entsteht ein Ausgleich (ADR 0006).
       const target = await this.checkTarget(
         tx,
         await this.household(tx, account.household_id),

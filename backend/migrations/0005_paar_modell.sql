@@ -1,5 +1,5 @@
 -- E4: Paar-Modell. Einzahlungen ins Gemeinsame, Ausgleich privat bezahlter gemeinsamer Ausgaben,
--- Einzahlungsregeln und Freigaben. Rechenregeln und Begründungen: ADR 0004.
+-- Einzahlungsregeln und Freigaben. Rechenregeln und Begründungen: ADR 0006.
 
 -- Neue Arten der Aufteilung:
 -- `einzahlung` = Geld vom privaten ins gemeinsame Konto. Privat ein Ausgang, der „Noch ohne

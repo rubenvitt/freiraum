@@ -1,4 +1,4 @@
-# ADR 0004: Paar-Modell (E4)
+# ADR 0006: Paar-Modell (E4)
 
 Stand: 17.11.2026 · Status: vorgeschlagen (mit FREI-5)
 
@@ -96,8 +96,8 @@ Buchungen von Hand zu (oder legt eine Regel an, die sie neu vorschlägt).
 - Budgetbeginn (ADR 0003): Einzahlungen vor dem Startmonat zählen nicht im Budget, und vorher gibt
   es auch keinen Abgleich (wie bei allen Vorschlägen). Soll/Ist der Einzahlungen und der Ausgleich
   sind Forderungen zwischen den Personen und rechnen unabhängig davon.
-- Die Sparquote als Kennzahl fehlt noch. Sie wird mit den Auswertungen (E5) definiert und dann als
-  weitere Freigabe ergänzt.
+- Die Sparquote ist seit E5 definiert ([ADR 0005](0005-auswertungen.md)), als Freigabe aber noch
+  nicht ergänzt.
 - Ausgaben vom gemeinsamen Konto für einen privaten Topf (umgekehrter Ausgleich) und das Verrechnen
   eines Ausgleichs mit der nächsten Einzahlung sind nicht umgesetzt.
 - Das LLM bekommt weiterhin nur die Töpfe des Haushalts, zu dem das Konto gehört, also keine

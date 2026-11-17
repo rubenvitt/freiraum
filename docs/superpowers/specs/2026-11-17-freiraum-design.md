@@ -55,7 +55,7 @@ Beträge immer als ganze Cent (Integer), Währung EUR.
 - **Vorschlag**: Topf-Vorschlag zu einer Buchung mit Quelle (`regel` oder `llm`), Konfidenz und Begründung in einem Satz.
 - **Wiederkehrend**: erkannte Serien (Abos, Miete, Gehalt) für Abo-Radar und Prognosen.
 
-Rechenregeln für Übertrag, Überziehung, Plan je Topf-Typ, Erst-ich-Automatik, Monatsabschluss und Kategorisierung: [ADR 0003](../../adr/0003-budget-kern.md). Einzahlungen, Ausgleich, Abgleich eigener Überweisungen und Freigaben: [ADR 0004](../../adr/0004-paar-modell.md).
+Rechenregeln für Übertrag, Überziehung, Plan je Topf-Typ, Erst-ich-Automatik, Monatsabschluss und Kategorisierung: [ADR 0003](../../adr/0003-budget-kern.md). Einzahlungen, Ausgleich, Abgleich eigener Überweisungen und Freigaben: [ADR 0006](../../adr/0006-paar-modell.md).
 
 ### Invarianten
 
@@ -112,4 +112,4 @@ Das Repo ist öffentlich. Deshalb: keine echten Finanzdaten, Kontonamen oder Zug
 - ~~Backend-Sprache und Framework~~: TypeScript + Hono, siehe ADR 0001
 - ~~Bankanbieter~~: Enable Banking für alle Konten, siehe [ADR 0002](../../adr/0002-bankanbindung.md)
 - ~~Welches LLM für Vorschläge, lokal oder per API~~: OpenRouter, Modell per Konfiguration, siehe [ADR 0003](../../adr/0003-budget-kern.md)
-- Standard-Einzahlungsregel fürs Gemeinsame: gemeinsam absprechen und als Regel je Person eintragen (kein Standard im Code, ADR 0004)
+- Standard-Einzahlungsregel fürs Gemeinsame: gemeinsam absprechen und als Regel je Person eintragen (kein Standard im Code, ADR 0006)

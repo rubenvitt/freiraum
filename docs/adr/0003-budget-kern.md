@@ -140,7 +140,7 @@ Abgeschlossene Monate rührt sie nicht an.
 ### Haushaltsgrenzen
 
 Töpfe kommen aus dem Haushalt des Kontos. Private Konten dürfen seit E4 auch Töpfe des
-gemeinsamen Haushalts verwenden (Ausgleich), siehe [ADR 0004](0004-paar-modell.md).
+gemeinsamen Haushalts verwenden (Ausgleich), siehe [ADR 0006](0006-paar-modell.md).
 
 ## Folgen
 

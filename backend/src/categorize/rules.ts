@@ -16,7 +16,7 @@ export interface Target {
 }
 
 /**
- * Einzahlung und Ausgleich haben je Haushaltsart eine feste Richtung (ADR 0004): Einzahlungen
+ * Einzahlung und Ausgleich haben je Haushaltsart eine feste Richtung (ADR 0006): Einzahlungen
  * gehen vom privaten aufs gemeinsame Konto, Erstattungen zurück. Sonst `null` (beide Richtungen).
  */
 export function requiredDirection(kind: SplitKind, household: HouseholdKind): Direction | null {

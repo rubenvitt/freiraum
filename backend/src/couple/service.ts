@@ -1,5 +1,5 @@
 /**
- * Paar-Modell (E4): Freigaben, Kennzahlen, Einzahlungsregeln und Ausgleich. ADR 0004.
+ * Paar-Modell (E4): Freigaben, Kennzahlen, Einzahlungsregeln und Ausgleich. ADR 0006.
  *
  * Privatsphäre wird hier durchgesetzt, nicht in der Oberfläche:
  * - Aus dem privaten Haushalt der anderen Person kommt nur, was sie freigegeben hat

@@ -105,7 +105,7 @@ Rechenregeln und Begründungen: [ADR 0003](../docs/adr/0003-budget-kern.md).
 
 ## Paar-Modell (E4)
 
-Rechenregeln und Begründungen: [ADR 0004](../docs/adr/0004-paar-modell.md).
+Rechenregeln und Begründungen: [ADR 0006](../docs/adr/0006-paar-modell.md).
 
 - **Einzahlung und Ausgleich** sind eigene Arten der Aufteilung. `einzahlung` geht vom privaten aufs
   gemeinsame Konto (privat mindert sie „Noch ohne Aufgabe“, gemeinsam zählt sie als Einnahme),
