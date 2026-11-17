@@ -1,6 +1,6 @@
 # ADR 0005: Auswertungen und Besitz (E5)
 
-Stand: 17.11.2026 · Status: vorgeschlagen (mit FREI-6)
+Stand: 17.11.2026 · Status: vorgeschlagen (mit FREI-6, ergänzt mit FREI-22)
 
 ## Kontext
 
@@ -30,7 +30,8 @@ bleibt auf dem Server: Jede Auswertung ist je Haushalt und nur für seine Mitgli
 | Einzahlung | vom privaten Konto ins Gemeinsame (ADR 0006): kein Konsum aus eigenen Töpfen, aber auch **nicht gespart**. Auf dem gemeinsamen Konto zählt sie als Einkommen. |
 | Gespart | Einkommen − Konsum − Einzahlungen (enthält Erst ich und was auf den Konten bleibt). |
 | Umbuchung | zählt nirgends. |
-| Ausgleich | zählt nirgends, ebenso der Anteil einer privaten Buchung in einem gemeinsamen Topf: Das ist eine Forderung ans Gemeinsame, kein eigener Konsum (ADR 0006). |
+| Ausgleich | zählt nirgends, ebenso der Anteil einer privaten Buchung in einem gemeinsamen Topf: Das ist eine Forderung ans Gemeinsame, kein eigener Konsum (ADR 0006). Im gemeinsamen Haushalt zählt dieser Anteil beim Topf (siehe „Über Haushalte hinweg“). |
+| Verrechnung | mit der Einzahlung verrechneter Ausgleich (ADR 0006, FREI-28): zählt wie eine Einzahlung im Monat von `settledOn`, privat als Einzahlung, gemeinsam als Einkommen. |
 
 Anteile kommen als **Basispunkte** (10 000 = 100 %), ohne Einkommen als `null` statt einer
 Division durch null.
@@ -71,8 +72,58 @@ Ausgaben) und „Nicht zugeordnete Eingänge“. Töpfe ohne Gruppe hängen dire
 ist immer ausgeglichen: Fließt mehr hinaus als hinein, kommt der Rest „Aus Erspartem“, sonst
 bleibt er „Übrig“. Die API liefert Knoten und Kanten, gezeichnet wird in der App.
 
-Ein Sankey über mehrere Haushalte (privat → Einzahlung → gemeinsam) hängt an den
-Einzahlungsregeln aus E4 und kommt danach.
+Einzahlungen (seit FREI-22) haben die Knotenart `einzahlung`: im privaten Haushalt ein Abfluss
+„Ins Gemeinsame“, im gemeinsamen je Person eine Quelle „Einzahlung <Name>“, vor den übrigen
+Quellen. Vorher landete die Einzahlung privat unter „Übrig“ und fehlte im Gemeinsamen.
+
+### Über Haushalte hinweg (FREI-22)
+
+Die Auswertungen bleiben je Haushalt. Was über Haushaltsgrenzen geht, zählt dort, wo es im
+Budget zählt (ADR 0006):
+
+- **Ausgaben vom Konto eines anderen Haushalts in eigenen Töpfen** (privat ausgelegt fürs
+  Gemeinsame, oder vom gemeinsamen Konto für einen privaten Topf) zählen beim Topf: als Konsum,
+  Fixkosten (wenn die Buchung zu einer Serie gehört), Topf im Sankey, Auffälligkeit und
+  Besitzkosten. Im Haushalt des Kontos bleiben sie neutral (Forderung bzw. Schuld). Mitgeladen
+  wird nur der Anteil im eigenen Topf, ohne Gegenpartei.
+- **Verrechnungen** zählen wie Einzahlungen. Damit stimmt die private Sparquote auch, wenn eine
+  Forderung verrechnet statt zurücküberwiesen wird.
+- Beides geht **nicht ins Alter des Geldes**: Es folgt dem Geld auf den eigenen Konten, und
+  dort ist es nicht geflossen. Den Runway ändert es nur über den Konsum.
+- Welche Seite einer Einzahlung vorliegt, erkennt die Rechnung an der Person: Auf dem
+  gemeinsamen Konto nennt die Aufteilung sie, auf dem privaten nicht. Am Vorzeichen geht es
+  nicht mehr, seit eine verrechnete Schuld eine Einzahlung auf beiden Seiten mindert.
+
+**Geldfluss einer Person** (`GET /v1/persons/{id}/analytics/flow`): Einkommen → privater
+Haushalt → Töpfe und Einzahlung → gemeinsamer Haushalt → gemeinsame Töpfe, ein Graph aus den
+Flüssen beider Haushalte. Knoten-IDs tragen die Haushalts-ID vorn (`<haushalt>/<knoten>`), jeder
+Knoten nennt seinen Haushalt.
+
+- Die Einzahlung ist **eine Kante** zwischen den Haushaltsknoten. Ihr Wert kommt von der Seite
+  des gemeinsamen Kontos (Einzahlungen der Person plus Verrechnungen), wie das Ist der
+  Einzahlungsregel. Die private Seite der Überweisungen fällt dafür weg, sonst zählte dasselbe
+  Geld zweimal, und weicht sie ab (anderer Buchungstag, Konto nicht in Freiraum), zeigt der
+  Graph trotzdem eine Kante mit einem Wert.
+- Jeder Haushaltsknoten ist für sich ausgeglichen („Aus Erspartem“ bzw. „Übrig“). Der
+  gemeinsame Haushalt zeigt alle seine Quellen, auch die Einzahlung der anderen Person: Das
+  gemeinsame Konto sehen beide ohnehin.
+- Ausgleich (Erstattungen, Rückzahlungen) zeigt der Graph nicht. Er ist auf beiden Seiten
+  neutral, und Kanten in beide Richtungen zwischen denselben Haushalten ergäben einen Kreis, den
+  ein Sankey nicht zeichnen kann.
+- **Nur für die Person selbst.** Der Graph enthält Beträge aus dem privaten Haushalt; keine
+  Freigabe öffnet ihn. Für die andere Person ist er immer „nicht gefunden“ (404), ebenso alle
+  Auswertungen ihres privaten Haushalts, auch mit der Sicht `budget`.
+
+Verworfen: der Geldfluss als Sicht des gemeinsamen Haushalts mit beiden privaten Haushalten als
+Quellen. Das zeigte das Einkommen beider Personen und bräuchte eine Freigabe mit Beträgen, die es
+bewusst nicht gibt.
+
+### Freigegebene Kennzahlen
+
+Was eine Person aus ihrem privaten Haushalt der anderen zeigt, sind Kennzahlen als Anteile:
+Sparquote, „Erst ich erledigt“ und Rücklagen gedeckt (`GET /v1/persons/{id}/metrics/{Monat}`,
+Freigaben `sparquote`, `erst_ich`, `ruecklagen`, ADR 0006). Jede Freigabe öffnet genau ihre
+Kennzahl, die übrigen bleiben `null`, und keine Antwort enthält einen Betrag.
 
 ### Auffälligkeiten
 
@@ -123,9 +174,12 @@ ein Umbenennen würde still die Auswertung ändern.
 - Die Sparquote ist seit FREI-19 als Freigabe `sparquote` für die andere Person abrufbar
   (`GET /v1/persons/{id}/metrics/{JJJJ-MM}`), nur als ganzer Prozentwert (abgerundet), ohne
   Beträge.
-- Fixkostenanteil und Sankey rechnen Einzahlungen ins Gemeinsame noch nicht mit: Im Sankey
-  landet die Einzahlung privat unter „Übrig“ und fehlt im Gemeinsamen als Quelle. Das Sankey über
-  Haushalte hinweg ist FREI-22. Der Runway rechnet feste Einzahlungen seit FREI-27 mit.
+- Der Sankey zeigt Einzahlungen seit FREI-22 auf beiden Seiten, dazu gibt es den Geldfluss über
+  die Haushalte einer Person. Der Fixkostenanteil kennt keine Einzahlungen: Eine feste Einzahlung
+  ins Gemeinsame ist dort keine Fixkost, die Fixkosten des Gemeinsamen zeigt dessen eigener
+  Fixkostenanteil. Der Runway rechnet feste Einzahlungen seit FREI-27 mit.
+- Seit FREI-22 ändern sich Kennzahlen des gemeinsamen Haushalts rückwirkend: Privat ausgelegte
+  gemeinsame Ausgaben zählen jetzt dort als Konsum, verrechnete Forderungen als Einkommen.
 - Eine noch nicht zugeordnete Überweisung ins Gemeinsame zählt im Runway doppelt: als Konsum
   (nicht zugeordnet gilt als ausgegeben) und über die feste Regel. Das ist vorsichtig gerechnet
   und verschwindet, sobald die Buchung als Einzahlung zugeordnet ist.

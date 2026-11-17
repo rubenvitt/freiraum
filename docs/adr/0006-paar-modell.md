@@ -166,12 +166,10 @@ daneben möglich.
 - Ausgaben vom gemeinsamen Konto für einen privaten Topf (umgekehrter Ausgleich) sind seit
   FREI-18 umgesetzt (Migration 0008), das Verrechnen mit der Einzahlung seit FREI-28
   (Migration 0009).
-- Die Auswertungen kennen Verrechnungen nicht, weil sie Buchungen lesen. Eine verrechnete
-  Forderung erscheint in der privaten Sparquote deshalb nicht als Einzahlung; die Ausgabe im
-  gemeinsamen Topf zählt dort ohnehin nicht. Das gehört zu FREI-22.
-- Die Auswertungen rechnen weiter je Haushalt der Konten. Ausgaben über Haushaltsgrenzen
-  (gemeinsamer Topf vom privaten Konto und umgekehrt) erscheinen dort beim Konto, nicht beim
-  Topf; das gehört zu den Auswertungen über Haushalte hinweg (FREI-22).
+- Seit FREI-22 rechnen die Auswertungen Verrechnungen wie Einzahlungen und Ausgaben über
+  Haushaltsgrenzen beim Topf, wie das Budget ([ADR 0005](0005-auswertungen.md), „Über
+  Haushalte hinweg“). Den Geldfluss über beide Haushalte sieht nur die Person selbst; eine
+  Freigabe dafür gibt es nicht.
 - Das LLM bekommt weiterhin nur die Töpfe des Haushalts, zu dem das Konto gehört, also keine
   gemeinsamen Töpfe bei privaten Konten. Ob das reicht, zeigt der Alltag.
 - Welche Einzahlungsregel gilt, legen die beiden Personen gemeinsam fest und tragen sie als Daten

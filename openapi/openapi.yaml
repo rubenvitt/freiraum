@@ -1741,7 +1741,7 @@ components:
         - links
         - inCents
         - outCents
-      description: "Sankey: Quellen → Haushalt → Gruppen → Töpfe. Die Mitte ist ausgeglichen („Aus Erspartem“ bzw. „Übrig“). Umbuchungen zwischen eigenen Konten fehlen."
+      description: "Sankey: Quellen → Haushalt → Gruppen → Töpfe. Die Mitte ist ausgeglichen („Aus Erspartem“ bzw. „Übrig“). Umbuchungen zwischen eigenen Konten und Ausgleich fehlen; Ausgaben vom Konto eines anderen Haushalts zählen beim Topf, Verrechnungen wie Einzahlungen."
     FlowNode:
       type: object
       properties:
@@ -1754,9 +1754,11 @@ components:
           enum:
             - quelle
             - haushalt
+            - einzahlung
             - gruppe
             - topf
             - rest
+          description: "`einzahlung`: im privaten Haushalt der Abfluss ins Gemeinsame, im gemeinsamen die Einzahlung einer Person (Quelle)"
         potId:
           type:
             - string
@@ -1792,6 +1794,109 @@ components:
         - source
         - target
         - valueCents
+    PersonFlow:
+      type: object
+      properties:
+        personId:
+          type: string
+          format: uuid
+        from:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        to:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        households:
+          type: array
+          items:
+            $ref: "#/components/schemas/PersonFlowHousehold"
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/PersonFlowNode"
+        links:
+          type: array
+          items:
+            $ref: "#/components/schemas/FlowLink"
+      required:
+        - personId
+        - from
+        - to
+        - households
+        - nodes
+        - links
+      description: "Sankey über die Haushalte einer Person: Einkommen → privater Haushalt → Töpfe und Einzahlung → gemeinsamer Haushalt → gemeinsame Töpfe. Jeder Haushalt ist für sich ausgeglichen. Die Einzahlung ist eine Kante zwischen den Haushaltsknoten, gezählt auf der Seite des gemeinsamen Kontos (plus Verrechnungen), wie das Ist der Einzahlungsregel."
+    PersonFlowHousehold:
+      type: object
+      properties:
+        householdId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        kind:
+          type: string
+          enum:
+            - privat
+            - gemeinsam
+        inCents:
+          type: integer
+          description: Zufluss in diesen Haushalt
+        outCents:
+          type: integer
+          description: Abfluss aus diesem Haushalt
+      required:
+        - householdId
+        - name
+        - kind
+        - inCents
+        - outCents
+    PersonFlowNode:
+      type: object
+      properties:
+        id:
+          type: string
+          description: "`<householdId>/<Knoten>`"
+        label:
+          type: string
+        kind:
+          type: string
+          enum:
+            - quelle
+            - haushalt
+            - einzahlung
+            - gruppe
+            - topf
+            - rest
+          description: "`einzahlung`: im privaten Haushalt der Abfluss ins Gemeinsame, im gemeinsamen die Einzahlung einer Person (Quelle)"
+        potId:
+          type:
+            - string
+            - "null"
+          format: uuid
+        potKind:
+          type:
+            - string
+            - "null"
+          enum:
+            - monatlich
+            - ruecklage
+            - ziel
+            - erst_ich
+            - null
+        householdId:
+          type: string
+          format: uuid
+          description: Haushalt, zu dem der Knoten gehört
+      required:
+        - id
+        - label
+        - kind
+        - potId
+        - potKind
+        - householdId
     Anomalies:
       type: object
       properties:
@@ -4411,6 +4516,68 @@ paths:
                 $ref: "#/components/schemas/Error"
         "404":
           description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Zeitraum ungültig (Anfang nach Ende oder mehr als 120 Monate)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/persons/{personId}/analytics/flow:
+    get:
+      tags: *a2
+      summary: "Geldfluss über die eigenen Haushalte: privat → Einzahlung → gemeinsam"
+      description: "Nur für die eigene Person. Für die andere Person gibt es keine Freigabe, die Beträge aus ihrem privaten Haushalt öffnet: immer 404."
+      security: *a3
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: personId
+          in: path
+        - schema:
+            type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+            example: 2026-11
+            description: "Standard: `to`"
+          required: false
+          description: "Standard: `to`"
+          name: from
+          in: query
+        - schema:
+            type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+            example: 2026-11
+            description: "Standard: laufender Monat"
+          required: false
+          description: "Standard: laufender Monat"
+          name: to
+          in: query
+      responses:
+        "200":
+          description: Geldfluss über Haushalte
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PersonFlow"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Person nicht gefunden (oder nicht die eigene)
           content:
             application/json:
               schema:

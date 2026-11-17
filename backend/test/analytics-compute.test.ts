@@ -11,6 +11,7 @@ import {
   flow,
   goalForecast,
   monthlyMetrics,
+  personFlow,
   runway,
 } from '../src/analytics/compute.js'
 
@@ -95,13 +96,28 @@ describe('Einordnung einer Buchung', () => {
         kinds,
       ),
     ).toMatchObject({ incomeCents: 0, consumptionCents: 0, contributionsCents: 100_000 })
-    // gemeinsames Konto: dieselbe Einzahlung ist Einkommen des gemeinsamen Haushalts
+    // gemeinsames Konto (nennt die Person): dieselbe Einzahlung ist Einkommen des Gemeinsamen
+    const shared = (amountCents: number) =>
+      tx('2026-01-02', amountCents, [
+        { kind: 'einzahlung', potId: null, personId: 'person-a', amountCents },
+      ])
+    expect(classify(shared(100_000), kinds)).toMatchObject({
+      incomeCents: 100_000,
+      consumptionCents: 0,
+      contributionsCents: 0,
+    })
+    // Eine verrechnete Schuld (FREI-28) mindert die Einzahlung, auf beiden Seiten: Es zählt die
+    // Seite, nicht das Vorzeichen.
+    expect(classify(shared(-3_000), kinds)).toMatchObject({
+      incomeCents: -3_000,
+      contributionsCents: 0,
+    })
     expect(
       classify(
-        tx('2026-01-02', 100_000, [{ kind: 'einzahlung', potId: null, amountCents: 100_000 }]),
+        tx('2026-01-02', 3_000, [{ kind: 'einzahlung', potId: null, amountCents: 3_000 }]),
         kinds,
       ),
-    ).toMatchObject({ incomeCents: 100_000, consumptionCents: 0, contributionsCents: 0 })
+    ).toMatchObject({ incomeCents: 0, contributionsCents: -3_000 })
   })
 
   it('lässt Ausgleich und privat bezahlte gemeinsame Ausgaben neutral (Forderung, kein Konsum)', () => {
@@ -354,6 +370,139 @@ describe('Geldfluss', () => {
     expect(f.links.find((l) => l.source === 'quelle:erspartes')?.valueCents).toBe(
       100_000 - 36_000 - 5_000,
     )
+  })
+})
+
+describe('Geldfluss über Haushalte hinweg', () => {
+  // Person A zahlt 1 000 € ein und hat 50 € für das Gemeinsame ausgelegt, die sie mit der
+  // Einzahlung verrechnet. Person B zahlt 800 € ein.
+  const sharedPots: AnalyticsPot[] = [
+    { id: 'g-essen', name: 'Lebensmittel', kind: 'monatlich', groupName: null, archived: false },
+    { id: 'g-miete', name: 'Miete', kind: 'monatlich', groupName: null, archived: false },
+  ]
+  const contribution = (amountCents: number, personId: string | null, offAccount = false) =>
+    tx('2026-01-02', amountCents, [{ kind: 'einzahlung', potId: null, personId, amountCents }], {
+      offAccount,
+    })
+  const own = [
+    salary('2026-01-01'),
+    contribution(-100_000, null),
+    contribution(-5_000, null, true), // Verrechnung, private Seite
+    tx('2026-01-10', -40_000, 'essen'),
+    tx('2026-01-11', -5_000, 'g-essen'), // ausgelegt fürs Gemeinsame: dort beim Topf
+  ]
+  const shared = [
+    contribution(100_000, 'a'),
+    contribution(5_000, 'a', true), // Verrechnung, gemeinsame Seite
+    contribution(80_000, 'b'),
+    tx('2026-01-03', -120_000, 'g-miete'),
+    tx('2026-01-11', -5_000, 'g-essen', { offAccount: true }),
+  ]
+  const names = new Map([
+    ['a', 'Person A'],
+    ['b', 'Person B'],
+  ])
+
+  it('zeigt die Einzahlung je Haushalt: privat als Abfluss, gemeinsam je Person als Quelle', () => {
+    const p = flow(own, pots, 'Person A', '2026-01', '2026-01')
+    expect(p.nodes.find((x) => x.id === 'einzahlung')).toMatchObject({
+      kind: 'einzahlung',
+      label: 'Ins Gemeinsame',
+    })
+    expect(p.links).toContainEqual({
+      source: 'haushalt',
+      target: 'einzahlung',
+      valueCents: 105_000,
+    })
+    // Der ausgelegte Einkauf ist eine Forderung, kein Konsum und kein Topf des Haushalts.
+    expect(p.nodes.some((x) => x.id === 'topf:g-essen')).toBe(false)
+    expect(p).toMatchObject({ inCents: 300_000, outCents: 145_000 })
+
+    const g = flow(shared, sharedPots, 'Gemeinsam', '2026-01', '2026-01', { personNames: names })
+    expect(g.nodes.filter((x) => x.kind === 'einzahlung').map((x) => [x.id, x.label])).toEqual([
+      ['einzahlung:a', 'Einzahlung Person A'],
+      ['einzahlung:b', 'Einzahlung Person B'],
+    ])
+    expect(g.links).toContainEqual({
+      source: 'einzahlung:a',
+      target: 'haushalt',
+      valueCents: 105_000,
+    })
+    expect(g.links).toContainEqual({
+      source: 'haushalt',
+      target: 'topf:g-essen',
+      valueCents: 5_000,
+    })
+    expect(g).toMatchObject({ inCents: 185_000, outCents: 125_000 })
+  })
+
+  it('verbindet privat und gemeinsam über eine Einzahlungskante, ausgeglichen', () => {
+    const f = personFlow(
+      'a',
+      { householdId: 'P', name: 'Person A', transactions: own, pots },
+      [
+        {
+          householdId: 'G',
+          name: 'Gemeinsam',
+          transactions: shared,
+          pots: sharedPots,
+          personNames: names,
+        },
+      ],
+      '2026-01',
+      '2026-01',
+    )
+    expect(f.households).toEqual([
+      { householdId: 'P', name: 'Person A', kind: 'privat', inCents: 300_000, outCents: 145_000 },
+      {
+        householdId: 'G',
+        name: 'Gemeinsam',
+        kind: 'gemeinsam',
+        inCents: 185_000,
+        outCents: 125_000,
+      },
+    ])
+    // Genau eine Kante privat → gemeinsam, mit dem Wert der gemeinsamen Seite.
+    const between = f.links.filter((l) => l.source === 'P/haushalt' && l.target === 'G/haushalt')
+    expect(between).toEqual([{ source: 'P/haushalt', target: 'G/haushalt', valueCents: 105_000 }])
+    expect(f.nodes.map((x) => x.id)).not.toContain('G/einzahlung:a')
+    expect(f.nodes.map((x) => x.id)).not.toContain('P/einzahlung:G')
+    expect(f.nodes.find((x) => x.id === 'G/einzahlung:b')).toMatchObject({
+      householdId: 'G',
+      label: 'Einzahlung Person B',
+    })
+    // Jede Kante zeigt auf vorhandene Knoten, und jeder Haushalt ist für sich ausgeglichen.
+    const ids = new Set(f.nodes.map((x) => x.id))
+    for (const l of f.links) expect(ids.has(l.source) && ids.has(l.target)).toBe(true)
+    for (const h of ['P/haushalt', 'G/haushalt']) {
+      const into = f.links.filter((l) => l.target === h).reduce((s, l) => s + l.valueCents, 0)
+      const out = f.links.filter((l) => l.source === h).reduce((s, l) => s + l.valueCents, 0)
+      expect(into, h).toBe(out)
+    }
+    const value = (s: string, t: string) =>
+      f.links.find((l) => l.source === s && l.target === t)?.valueCents
+    expect(value('P/haushalt', 'P/rest:uebrig')).toBe(300_000 - 105_000 - 40_000)
+    expect(value('G/haushalt', 'G/rest:uebrig')).toBe(185_000 - 125_000)
+  })
+
+  it('zählt die private Seite nicht doppelt, wenn sie von der gemeinsamen abweicht', () => {
+    // Die Überweisung ist privat schon im Januar gebucht, auf dem gemeinsamen Konto erst im
+    // Februar: Im Januar gibt es keine Einzahlungskante und keinen Abfluss „Ins Gemeinsame“.
+    const f = personFlow(
+      'a',
+      { householdId: 'P', name: 'Person A', transactions: [salary('2026-01-01'), own[1]!], pots },
+      [{ householdId: 'G', name: 'Gemeinsam', transactions: [], pots: [], personNames: names }],
+      '2026-01',
+      '2026-01',
+    )
+    expect(f.links).toEqual([
+      { source: 'P/quelle:1', target: 'P/haushalt', valueCents: 300_000 },
+      { source: 'P/haushalt', target: 'P/rest:uebrig', valueCents: 300_000 },
+    ])
+  })
+
+  it('lässt Buchungen außerhalb der eigenen Konten aus dem Alter des Geldes', () => {
+    expect(agedOutflows(shared.filter((t) => t.offAccount))).toEqual([])
   })
 })
 
