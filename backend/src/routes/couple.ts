@@ -75,17 +75,17 @@ const MetricsSchema = z
   })
   .openapi('Metrics')
 
-const ContributionRuleSchema = z
-  .object({
-    householdId: z.uuid(),
-    personId: z.uuid(),
-    validFrom: Month,
-    kind: z.enum(['fest', 'prozent']),
-    amountCents: z.number().int().nullable(),
-    percentBp: z.number().int().nullable(),
-    updatedAt: z.iso.datetime(),
-  })
-  .openapi('ContributionRule')
+const ContributionRuleFields = z.object({
+  householdId: z.uuid(),
+  personId: z.uuid(),
+  validFrom: Month,
+  kind: z.enum(['fest', 'prozent']),
+  amountCents: z.number().int().nullable(),
+  percentBp: z.number().int().nullable(),
+  updatedAt: z.iso.datetime(),
+})
+
+const ContributionRuleSchema = ContributionRuleFields.openapi('ContributionRule')
 
 const ContributionsSchema = z
   .object({
@@ -95,7 +95,9 @@ const ContributionsSchema = z
       z.object({
         personId: z.uuid(),
         displayName: z.string(),
-        rule: ContributionRuleSchema.nullable().openapi({ description: 'gültige Regel im Monat' }),
+        // Inline statt Verweis: Aus Verweis + nullable wird allOf, und das liest der generierte
+        // Swift-Client nicht als optional (FREI-26).
+        rule: ContributionRuleFields.nullable().openapi({ description: 'gültige Regel im Monat' }),
         targetCents: z.number().int().nullable().openapi({ description: 'Soll' }),
         targetVisible: z.boolean().openapi({
           description:

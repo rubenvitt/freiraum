@@ -256,6 +256,97 @@ public final class FreiraumService: Sendable {
         }
     }
 
+    // MARK: - Einzahlungen ins Gemeinsame
+
+    /// Einzahlungsregeln beider Personen im gemeinsamen Haushalt, mit Historie.
+    public func contributionRules(householdId: String) async throws(APIError) -> [ContributionRule] {
+        try await call {
+            let out = try await client.getV1HouseholdsHouseholdIdContributionRules(path: .init(householdId: householdId))
+            guard case let .ok(ok) = out else { throw unexpected(out) }
+            return try ok.body.json.items.map(ContributionRule.init)
+        }
+    }
+
+    /// Eigene Regel ab `from` setzen (ersetzt eine Regel mit demselben Startmonat).
+    public func setContributionRule(
+        householdId: String, from: YearMonth, rule: ContributionRuleInput
+    ) async throws(APIError) -> ContributionRule {
+        // Nur das passende Feld senden; das andere bleibt weg (der Server liest fehlend als null).
+        let amount: Int? = switch rule {
+        case let .fixed(cents): cents
+        case .percent: nil
+        }
+        let percent: Int? = switch rule {
+        case .fixed: nil
+        case let .percent(bp): bp
+        }
+        return try await call {
+            let out = try await client.putV1HouseholdsHouseholdIdContributionRulesMonth(
+                path: .init(householdId: householdId, month: from.description),
+                body: .json(.init(kind: try apiEnum(rule.kind.rawValue), amountCents: amount, percentBp: percent))
+            )
+            guard case let .ok(ok) = out else { throw unexpected(out) }
+            return try ContributionRule(try ok.body.json)
+        }
+    }
+
+    /// Eigene Regel mit Startmonat `from` löschen; die vorige gilt wieder.
+    public func deleteContributionRule(householdId: String, from: YearMonth) async throws(APIError) {
+        try await call {
+            let out = try await client.deleteV1HouseholdsHouseholdIdContributionRulesMonth(
+                path: .init(householdId: householdId, month: from.description)
+            )
+            guard case .noContent = out else { throw unexpected(out) }
+        }
+    }
+
+    /// Soll und Ist je Person im Monat. Das Soll der anderen Person fehlt bei „Prozent vom Netto“
+    /// ohne Freigabe `einzahlung_soll`.
+    public func contributions(householdId: String, month: YearMonth) async throws(APIError) -> Contributions {
+        try await call {
+            let out = try await client.getV1HouseholdsHouseholdIdContributionsMonth(
+                path: .init(householdId: householdId, month: month.description)
+            )
+            guard case let .ok(ok) = out else { throw unexpected(out) }
+            return try Contributions(try ok.body.json)
+        }
+    }
+
+    // MARK: - Freigaben
+
+    /// Erteilte und erhaltene Freigaben.
+    public func shares() async throws(APIError) -> Shares {
+        try await call {
+            let out = try await client.getV1Shares()
+            guard case let .ok(ok) = out else { throw unexpected(out) }
+            let json = try ok.body.json
+            return Shares(
+                granted: try json.granted.map(Share.init),
+                received: try json.received.map { try Share($0.value1) }
+            )
+        }
+    }
+
+    /// Freigabe an die Person erteilen, mit der man einen Haushalt teilt. Wiederholen ändert nichts.
+    public func grantShare(_ scope: ShareScope, to personId: String) async throws(APIError) {
+        try await call {
+            let out = try await client.putV1SharesPersonIdScope(
+                path: .init(personId: personId, scope: try apiEnum(scope.rawValue))
+            )
+            guard case .ok = out else { throw unexpected(out) }
+        }
+    }
+
+    /// Freigabe zurücknehmen; wirkt sofort.
+    public func revokeShare(_ scope: ShareScope, from personId: String) async throws(APIError) {
+        try await call {
+            let out = try await client.deleteV1SharesPersonIdScope(
+                path: .init(personId: personId, scope: try apiEnum(scope.rawValue))
+            )
+            guard case .noContent = out else { throw unexpected(out) }
+        }
+    }
+
     // MARK: - Buchungen
 
     /// Buchungen, die auf Bestätigung warten (neueste zuerst).
