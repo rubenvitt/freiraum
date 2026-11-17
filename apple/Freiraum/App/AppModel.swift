@@ -28,6 +28,11 @@ final class AppModel {
     /// Ausgleich je gemeinsamem Haushalt
     private(set) var settlements: [String: Settlements] = [:]
     private(set) var pending: [Transaction] = []
+    /// Soll und Ist der Einzahlungen im angezeigten Monat, je gemeinsamem Haushalt.
+    private(set) var contributions: [String: Contributions] = [:]
+    /// Einzahlungsregeln mit Historie, je gemeinsamem Haushalt (geladen, wenn die Ansicht öffnet).
+    private(set) var contributionRules: [String: [ContributionRule]] = [:]
+    private(set) var shares: Shares?
     var selectedHouseholdId: String?
     private(set) var month: YearMonth = .current()
 
@@ -101,6 +106,16 @@ final class AppModel {
     func pendingCount(householdId: String?) -> Int {
         guard let householdId else { return pending.count }
         return pending.filter { self.household(of: $0)?.id == householdId }.count
+    }
+
+    /// Die andere Person im gemeinsamen Haushalt.
+    func partner(in household: Household) -> Person? {
+        household.members.first { $0.id != person?.id }
+    }
+
+    func contributionsState(for household: Household) -> ContributionsState? {
+        guard household.kind == .gemeinsam, let c = contributions[household.id] else { return nil }
+        return ContributionsState(c, me: person?.id)
     }
 
     func overview(for household: Household) -> OverviewState? {
@@ -183,6 +198,9 @@ final class AppModel {
         budgets = [:]
         settlements = [:]
         pending = []
+        contributions = [:]
+        contributionRules = [:]
+        shares = nil
         selectedHouseholdId = nil
         errorMessage = message
         snapshots.clear()
@@ -229,6 +247,7 @@ final class AppModel {
             errorMessage = nil
             try await loadSettlements()
             lastLoaded = Date()
+            contributions = await fetchContributions(service, households: households, month: month)
             await afterLoad(notify: notify)
         } catch {
             report(error)
@@ -240,6 +259,7 @@ final class AppModel {
         guard month != self.month else { return }
         self.month = month
         budgets = [:]
+        contributions = [:]
         await load()
     }
 
@@ -267,6 +287,12 @@ final class AppModel {
             for budget in budgets { self.budgets[budget.householdId] = budget }
             self.pending = pending
             try await loadSettlements()
+            // Eine bestätigte Einzahlung ändert das Ist.
+            let shared = households.filter { householdIds.contains($0.id) && $0.kind == .gemeinsam }
+            if !shared.isEmpty {
+                let fresh = await fetchContributions(service, households: shared, month: month)
+                contributions.merge(fresh, uniquingKeysWith: { _, new in new })
+            }
             await afterLoad(notify: false)
         } catch {
             report(error)
@@ -290,6 +316,22 @@ final class AppModel {
             if let owner = pots.first(where: { $0.value.contains { $0.id == potId } })?.key { ids.insert(owner) }
         }
         return ids
+    }
+
+    /// Soll und Ist der gemeinsamen Haushalte. Ein Fehler hier lässt das Budget stehen und
+    /// zeigt nur die Meldung.
+    private func fetchContributions(
+        _ service: FreiraumService, households: [Household], month: YearMonth
+    ) async -> [String: Contributions] {
+        var result: [String: Contributions] = [:]
+        for household in households where household.kind == .gemeinsam {
+            do {
+                result[household.id] = try await service.contributions(householdId: household.id, month: month)
+            } catch {
+                report(error)
+            }
+        }
+        return result
     }
 
     private func afterLoad(notify: Bool) async {
@@ -420,6 +462,70 @@ final class AppModel {
             try await action(service)
             pots[householdId] = try await service.pots(householdId: householdId)
             await reload(householdId: householdId)
+            return true
+        } catch {
+            report(error)
+            return false
+        }
+    }
+
+    // MARK: Einzahlungen ins Gemeinsame
+
+    /// Regeln mit Historie und Freigaben laden (für die Ansicht „Einzahlungen“).
+    func loadContributionDetails(householdId: String) async {
+        guard let service else { return }
+        do {
+            async let rules = service.contributionRules(householdId: householdId)
+            async let shares = service.shares()
+            let (r, s) = try await (rules, shares)
+            contributionRules[householdId] = r
+            self.shares = s
+        } catch {
+            report(error)
+        }
+    }
+
+    /// Eigene Regel ab `from` setzen.
+    func setContributionRule(householdId: String, from: YearMonth, rule: ContributionRuleInput) async -> Bool {
+        await changeContributions(householdId: householdId) { service in
+            _ = try await service.setContributionRule(householdId: householdId, from: from, rule: rule)
+        }
+    }
+
+    /// Eigene Regel mit Startmonat `from` löschen; die vorige gilt wieder.
+    func deleteContributionRule(householdId: String, from: YearMonth) async -> Bool {
+        await changeContributions(householdId: householdId) { service in
+            try await service.deleteContributionRule(householdId: householdId, from: from)
+        }
+    }
+
+    /// Freigabe erteilen oder zurücknehmen; danach Freigaben neu laden.
+    func setShare(_ scope: ShareScope, to personId: String, granted: Bool) async -> Bool {
+        guard let service else { return false }
+        do {
+            if granted {
+                try await service.grantShare(scope, to: personId)
+            } else {
+                try await service.revokeShare(scope, from: personId)
+            }
+            shares = try await service.shares()
+            return true
+        } catch {
+            report(error)
+            return false
+        }
+    }
+
+    /// Aktion an Regeln ausführen, danach Regeln sowie Soll und Ist des Haushalts neu laden.
+    private func changeContributions(householdId: String, _ action: (FreiraumService) async throws -> Void) async -> Bool {
+        guard let service else { return false }
+        do {
+            try await action(service)
+            async let rules = service.contributionRules(householdId: householdId)
+            async let current = service.contributions(householdId: householdId, month: month)
+            let (r, c) = try await (rules, current)
+            contributionRules[householdId] = r
+            contributions[householdId] = c
             return true
         } catch {
             report(error)

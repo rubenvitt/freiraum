@@ -4,7 +4,7 @@
  */
 import type { TransactionSql } from 'postgres'
 import { computeMonth } from '../budget/compute.js'
-import { addMonthsTo, type Month, monthOf, monthsBetween } from '../budget/months.js'
+import { addMonthsTo, firstDay, type Month, monthOf, monthsBetween } from '../budget/months.js'
 import type { BudgetService } from '../budget/service.js'
 import { cents } from '../db/cents.js'
 import type { Db } from '../db/client.js'
@@ -281,6 +281,27 @@ export class AnalyticsService {
     return month.readyToAssignCents + month.assignedInFutureCents + inPots + unassigned
   }
 
+  /**
+   * Feste Einzahlungen der Person eines privaten Haushalts ins Gemeinsame, die im Monat gelten
+   * (je gemeinsamem Haushalt die jüngste Regel bis zum Monat). Eine Regel „Prozent vom Netto“
+   * zählt nicht: Ohne Einkommen fällt sie weg. Gemeinsame Haushalte zahlen nichts ein.
+   */
+  private async fixedContributions(sql: Sql, householdId: string, month: Month): Promise<number> {
+    const [row] = await sql<{ amount_cents: string }[]>`
+      select coalesce(sum(latest.amount_cents), 0) as amount_cents
+      from (
+        select distinct on (r.household_id) r.kind, r.amount_cents
+        from households h
+        join contribution_rules r on r.person_id = h.owner_person_id
+        join household_members m on m.household_id = r.household_id and m.person_id = r.person_id
+        where h.id = ${householdId} and h.kind = 'privat' and r.valid_from <= ${firstDay(month)}
+        order by r.household_id, r.valid_from desc
+      ) latest
+      where latest.kind = 'fest'
+    `
+    return row ? cents(row.amount_cents) : 0
+  }
+
   // --- Auswertungen ---------------------------------------------------------------
 
   /**
@@ -309,13 +330,14 @@ export class AnalyticsService {
     const transactions = await this.transactions(this.db, householdId)
     const { months, totals } = monthlyMetrics(transactions, pots, from, to, asOf)
     const cash = await this.cash(this.db, householdId, transactions, monthOf(asOf))
+    const contributions = await this.fixedContributions(this.db, householdId, monthOf(asOf))
     return {
       householdId,
       from,
       to,
       months,
       totals,
-      runway: runway(transactions, pots, cash, asOf),
+      runway: runway(transactions, pots, cash, asOf, contributions),
     }
   }
 

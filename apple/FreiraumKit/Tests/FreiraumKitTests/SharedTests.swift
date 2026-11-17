@@ -218,7 +218,7 @@ private let pots: [String: [Pot]] = [
              "openItems":[],
              "openDebts":[{"transactionId":"t1","personId":"pa","bookingDate":"2026-11-16","counterpartyName":"Laden",
                "amountCents":2500,"openCents":2500}],
-             "manual":[{"id":"m1","personId":"pa","amountCents":500,"settledOn":"2026-11-10","note":null,
+             "manual":[{"id":"m1","personId":"pa","kind":"zahlung","amountCents":500,"settledOn":"2026-11-10","note":null,
                "createdAt":"2026-11-10T10:00:00.000Z"}]}
             """)
         }

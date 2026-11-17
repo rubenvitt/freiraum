@@ -216,6 +216,17 @@ export class BudgetService {
     }
   }
 
+  /**
+   * Für Vorgänge, die das Budget eines Monats von außen ändern (Verrechnung im Paar-Modell):
+   * nicht vor dem Budgetbeginn und nicht in einem abgeschlossenen Monat. Sonst 409.
+   */
+  async requireOpenMonth(sql: Sql, householdId: string, month: Month): Promise<void> {
+    if ((await this.closedMonths(sql, householdId)).has(month)) {
+      throw new ApiError(409, 'monat_abgeschlossen', `Der Monat ${month} ist abgeschlossen.`)
+    }
+    await this.requireStarted(sql, householdId, month)
+  }
+
   /** Topf, sofern die Person Mitglied seines Haushalts ist; sonst 404. */
   async accessiblePot(sql: Sql, personId: string, potId: string): Promise<Pot> {
     const [row] = await sql<PotRow[]>`
@@ -444,6 +455,22 @@ export class BudgetService {
       where a.household_id = ${householdId} and s.kind = 'einzahlung' and s.amount_cents < 0
       group by 1
     `
+    // Verrechnungen (FREI-28) zählen wie Einzahlungen: im Gemeinsamen als Eingang, im privaten
+    // Haushalt der Person als Minderung von „Noch ohne Aufgabe“. Positiv = verrechnete
+    // Forderung (zählt als mehr Einzahlung), negativ = verrechnete Schuld (zählt als weniger).
+    const offsets = await sql<{ shared: boolean; month: string; amount_cents: string }[]>`
+      select s.household_id = ${householdId} as shared,
+             to_char(s.settled_on, 'YYYY-MM') as month, sum(s.amount_cents) as amount_cents
+      from settlements s
+      where s.kind = 'verrechnung'
+        and (s.household_id = ${householdId}
+             or s.person_id = (select owner_person_id from households where id = ${householdId}))
+      group by 1, 2
+    `
+    const offsetRows = (shared: boolean, sign: 1 | -1) =>
+      offsets
+        .filter((o) => o.shared === shared)
+        .map((o) => ({ month: o.month, amountCents: sign * cents(o.amount_cents) }))
     return {
       potRows: pots,
       pots: pots.map((p) => ({
@@ -464,11 +491,14 @@ export class BudgetService {
         month: a.month,
         amountCents: cents(a.amount_cents),
       })),
-      inflows: inflows.map((i) => ({ month: i.month, amountCents: cents(i.amount_cents) })),
-      contributions: contributions.map((c) => ({
-        month: c.month,
-        amountCents: cents(c.amount_cents),
-      })),
+      inflows: [
+        ...inflows.map((i) => ({ month: i.month, amountCents: cents(i.amount_cents) })),
+        ...offsetRows(true, 1),
+      ],
+      contributions: [
+        ...contributions.map((c) => ({ month: c.month, amountCents: cents(c.amount_cents) })),
+        ...offsetRows(false, -1),
+      ],
       start: { month: start.month, openingBalanceCents: start.openingBalanceCents },
     }
   }

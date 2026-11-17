@@ -161,3 +161,50 @@ extension Settlements {
         )
     }
 }
+
+extension ContributionRule {
+    init(
+        householdId: String, personId: String, validFrom: String, kind: String, amountCents: Int?, percentBp: Int?
+    ) throws {
+        guard let month = YearMonth(validFrom) else { throw MappingError(description: "Monat \(validFrom)") }
+        self.init(
+            householdId: householdId, personId: personId, validFrom: month, kind: try apiEnum(kind),
+            amountCents: amountCents, percentBp: percentBp
+        )
+    }
+
+    init(_ r: Components.Schemas.ContributionRule) throws {
+        try self.init(
+            householdId: r.householdId, personId: r.personId, validFrom: r.validFrom, kind: r.kind.rawValue,
+            amountCents: r.amountCents, percentBp: r.percentBp
+        )
+    }
+}
+
+extension Contributions {
+    init(_ c: Components.Schemas.Contributions) throws {
+        guard let month = YearMonth(c.month) else { throw MappingError(description: "Monat \(c.month)") }
+        self.init(
+            householdId: c.householdId, month: month,
+            members: try c.members.map { m in
+                MemberContribution(
+                    personId: m.personId, displayName: m.displayName,
+                    rule: try m.rule.map { r in
+                        try ContributionRule(
+                            householdId: r.householdId, personId: r.personId, validFrom: r.validFrom,
+                            kind: r.kind.rawValue, amountCents: r.amountCents, percentBp: r.percentBp
+                        )
+                    },
+                    targetCents: m.targetCents, targetVisible: m.targetVisible, paidCents: m.paidCents,
+                    remainingCents: m.remainingCents
+                )
+            }
+        )
+    }
+}
+
+extension Share {
+    init(_ s: Components.Schemas.Share) throws {
+        self.init(personId: s.personId, displayName: s.displayName, scope: try apiEnum(s.scope.rawValue))
+    }
+}
