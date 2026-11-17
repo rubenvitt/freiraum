@@ -1295,3 +1295,201 @@ describe('Freigaben und Kennzahlen', () => {
     expect((await read()).status).toBe(404)
   })
 })
+
+describe('Auswertungen über Haushalte hinweg', () => {
+  const settle = (token: string, householdId: string, input: Json) =>
+    request('POST', `/v1/households/${householdId}/settlements`, input, token)
+  const personFlow = (token: string, personId: string) =>
+    request('GET', `/v1/persons/${personId}/analytics/flow`, undefined, token)
+  const analytics = (token: string, householdId: string, what: string) =>
+    request('GET', `/v1/households/${householdId}/analytics/${what}`, undefined, token)
+
+  /** Überweisung vom privaten aufs gemeinsame Konto, auf beiden Seiten importiert. */
+  async function transfer(
+    p: { token: string; accountId: string },
+    sharedAccountId: string,
+    iban: string,
+    cents: number,
+  ) {
+    await importInto(p.token, p.accountId, [
+      { bookingDate: day(3), amountCents: -cents, counterpartyIban: IBAN_SHARED },
+    ])
+    await importInto(p.token, sharedAccountId, [
+      { bookingDate: day(3), amountCents: cents, counterpartyIban: iban },
+    ])
+  }
+
+  /**
+   * A verdient 3 000 €, legt 50 € fürs Gemeinsame aus, überweist 450 € und verrechnet 50 €.
+   * B überweist 400 €.
+   */
+  async function scenario() {
+    const c = await couple()
+    const { a, b, sharedId, sharedAccountId } = c
+    await salary(a, 300_000)
+    const groceries = await pot(a.token, sharedId, { name: 'Lebensmittel', kind: 'monatlich' })
+    await importInto(a.token, a.accountId, [
+      { bookingDate: day(2), amountCents: -5_000, counterpartyName: 'Supermarkt Beispiel' },
+    ])
+    const shopping = (await transactions(a.token, a.accountId)).find(
+      (t) => t.amountCents === -5_000,
+    )!
+    await setSplits(a.token, shopping.id, [{ kind: 'topf', potId: groceries, amountCents: -5_000 }])
+    await transfer(a, sharedAccountId, IBAN_A, 45_000)
+    await transfer(b, sharedAccountId, IBAN_B, 40_000)
+    expect(
+      (
+        await settle(a.token, sharedId, {
+          amountCents: 5_000,
+          kind: 'verrechnung',
+          settledOn: day(3),
+        })
+      ).status,
+    ).toBe(201)
+    return { ...c, groceries }
+  }
+
+  it('zeigt den Geldfluss einer Person über privat und gemeinsam, ausgeglichen', async () => {
+    const { a, b, sharedId, groceries } = await scenario()
+    const res = await personFlow(a.token, a.id)
+    expect(res.status).toBe(200)
+    const f = await body(res)
+    expect(f).toMatchObject({ personId: a.id, from: current, to: current })
+    expect(f.households).toEqual([
+      {
+        householdId: a.householdId,
+        name: expect.any(String),
+        kind: 'privat',
+        inCents: 300_000,
+        outCents: 50_000,
+      },
+      {
+        householdId: sharedId,
+        name: 'Gemeinsam',
+        kind: 'gemeinsam',
+        inCents: 90_000,
+        outCents: 5_000,
+      },
+    ])
+    const own = `${a.householdId}/haushalt`
+    const shared = `${sharedId}/haushalt`
+    // Eine Kante privat → gemeinsam: 450 € überwiesen plus 50 € verrechnet.
+    expect(f.links.filter((l: Json) => l.source === own && l.target === shared)).toEqual([
+      { source: own, target: shared, valueCents: 50_000 },
+    ])
+    const label = (id: string) => f.nodes.find((n: Json) => n.id === id)?.label
+    expect(label(`${a.householdId}/quelle:1`)).toBe('Arbeitgeber Beispiel GmbH')
+    expect(label(`${sharedId}/einzahlung:${b.id}`)).toBe('Einzahlung Person B')
+    expect(label(`${sharedId}/einzahlung:${a.id}`)).toBeUndefined()
+    // Der ausgelegte Einkauf zählt im gemeinsamen Topf, nicht im privaten Haushalt.
+    expect(f.nodes.find((n: Json) => n.potId === groceries)).toMatchObject({
+      householdId: sharedId,
+      label: 'Lebensmittel',
+    })
+    expect(f.links).toContainEqual({
+      source: shared,
+      target: `${sharedId}/topf:${groceries}`,
+      valueCents: 5_000,
+    })
+    for (const h of [own, shared]) {
+      const into = f.links
+        .filter((l: Json) => l.target === h)
+        .reduce((s: number, l: Json) => s + l.valueCents, 0)
+      const out = f.links
+        .filter((l: Json) => l.source === h)
+        .reduce((s: number, l: Json) => s + l.valueCents, 0)
+      expect(into, h).toBe(out)
+    }
+  })
+
+  it('rechnet Verrechnung und Ausgaben über Haushaltsgrenzen in die Kennzahlen', async () => {
+    const { a, b, sharedId } = await scenario()
+    const own = await body(await analytics(a.token, a.householdId, 'metrics'))
+    // Einzahlung 450 € + 50 € verrechnet; der ausgelegte Einkauf ist kein eigener Konsum.
+    expect(own.months.at(-1)).toMatchObject({
+      incomeCents: 300_000,
+      consumptionCents: 0,
+      contributionsCents: 50_000,
+      savedCents: 250_000,
+    })
+    const shared = await body(await analytics(b.token, sharedId, 'metrics'))
+    expect(shared.months.at(-1)).toMatchObject({
+      incomeCents: 90_000,
+      consumptionCents: 5_000,
+      contributionsCents: 0,
+    })
+    const flow = await body(await analytics(a.token, a.householdId, 'flow'))
+    expect(flow.links).toContainEqual({
+      source: 'haushalt',
+      target: 'einzahlung',
+      valueCents: 50_000,
+    })
+    // Die Sparquote für die andere Person rechnet mit derselben Einzahlung.
+    await request('PUT', `/v1/shares/${b.id}/sparquote`, undefined, a.token)
+    expect(
+      (
+        await body(
+          await request('GET', `/v1/persons/${a.id}/metrics/${current}`, undefined, b.token),
+        )
+      ).sparquote,
+    ).toEqual({ savingsRatePct: 83 })
+  })
+
+  it('liefert der anderen Person ohne Freigabe keine Zahl aus dem privaten Haushalt, und auch mit allen Freigaben keine Beträge', async () => {
+    const { a, b } = await scenario()
+    const outsider = await person('Person C', null)
+    const metrics = (token: string) =>
+      request('GET', `/v1/persons/${a.id}/metrics/${current}`, undefined, token)
+    const hidden = async () => {
+      for (const token of [b.token, outsider.token]) {
+        const res = await personFlow(token, a.id)
+        expect(res.status).toBe(404)
+        expect((await body(res)).error.code).toBe('person_nicht_gefunden')
+      }
+      for (const what of ['metrics', 'flow', 'anomalies', 'goals', 'ownership-costs']) {
+        expect((await analytics(b.token, a.householdId, what)).status, what).toBe(404)
+      }
+    }
+
+    // Ohne Freigabe: keine Kennzahl.
+    await hidden()
+    expect(await body(await metrics(b.token))).toEqual({
+      personId: a.id,
+      month: current,
+      scopes: [],
+      erstIch: null,
+      ruecklagen: null,
+      sparquote: null,
+    })
+
+    // Je Freigabe genau diese Kennzahl, sonst nichts.
+    const fields = {
+      erst_ich: 'erstIch',
+      ruecklagen: 'ruecklagen',
+      sparquote: 'sparquote',
+    } as const
+    for (const [scope, field] of Object.entries(fields)) {
+      await request('PUT', `/v1/shares/${b.id}/${scope}`, undefined, a.token)
+      const m = await body(await metrics(b.token))
+      expect(m.scopes).toEqual([scope])
+      for (const other of Object.values(fields)) {
+        if (other === field) expect(m[other], other).not.toBeNull()
+        else expect(m[other], other).toBeNull()
+      }
+      expect(JSON.stringify(m)).not.toMatch(/Cents/)
+      await request('DELETE', `/v1/shares/${b.id}/${scope}`, undefined, a.token)
+    }
+
+    // Alle Freigaben zugleich öffnen weder Geldfluss noch Auswertungen.
+    for (const scope of ['erst_ich', 'ruecklagen', 'einzahlung_soll', 'budget', 'sparquote']) {
+      await request('PUT', `/v1/shares/${b.id}/${scope}`, undefined, a.token)
+    }
+    await hidden()
+    expect(JSON.stringify(await body(await metrics(b.token)))).not.toMatch(/Cents/)
+    // Den gemeinsamen Teil sieht B im eigenen Geldfluss, ohne As private Zahlen.
+    const own = await body(await personFlow(b.token, b.id))
+    expect(own.households.map((h: Json) => h.kind)).toEqual(['privat', 'gemeinsam'])
+    expect(own.nodes.some((n: Json) => n.householdId === a.householdId)).toBe(false)
+    expect(JSON.stringify(own)).not.toContain('Arbeitgeber Beispiel')
+  })
+})

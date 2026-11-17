@@ -1,6 +1,11 @@
 /**
  * Auswertungen (E5) und Besitz. Alles ist je Haushalt; Zugriff haben nur seine Mitglieder
  * (sonst 404, wie im Budget). Die Rechnung steckt in `compute.ts`, hier wird nur geladen.
+ *
+ * Eine Freigabe öffnet keine Auswertung: Auch mit der Sicht `budget` bleiben Auswertungen des
+ * privaten Haushalts der anderen Person „nicht gefunden“. Was eine Person freigibt, sind
+ * Kennzahlen als Anteile (`CoupleService.metrics`). Der Geldfluss über Haushalte hinweg gehört
+ * nur der Person selbst (FREI-22).
  */
 import type { TransactionSql } from 'postgres'
 import { computeMonth } from '../budget/compute.js'
@@ -26,6 +31,8 @@ import {
   type MonthMetrics,
   monthlyMetrics,
   monthRange,
+  type PersonFlow,
+  personFlow,
   type Runway,
   runway,
   shareBp,
@@ -47,6 +54,12 @@ export interface MetricsView {
 
 export interface FlowView extends Flow {
   householdId: string
+  from: Month
+  to: Month
+}
+
+export interface PersonFlowView extends PersonFlow {
+  personId: string
   from: Month
   to: Month
 }
@@ -130,6 +143,9 @@ const toAsset = (r: AssetRow): Asset => ({
   createdAt: r.created_at,
 })
 
+const personNotFound = () =>
+  new ApiError(404, 'person_nicht_gefunden', 'Diese Person gibt es nicht.')
+
 const assetNotFound = () =>
   new ApiError(404, 'besitz_nicht_gefunden', 'Diesen Besitz gibt es nicht.')
 
@@ -165,6 +181,15 @@ export class AnalyticsService {
     return row?.name ?? ''
   }
 
+  /** Anzeigenamen der Mitglieder eines Haushalts (für Einzahlungen im Gemeinsamen). */
+  private async memberNames(sql: Sql, householdId: string): Promise<Map<string, string>> {
+    const rows = await sql<{ id: string; display_name: string }[]>`
+      select p.id, p.display_name from household_members m join persons p on p.id = m.person_id
+      where m.household_id = ${householdId}
+    `
+    return new Map(rows.map((r) => [r.id, r.display_name]))
+  }
+
   private async pots(sql: Sql, householdId: string): Promise<AnalyticsPot[]> {
     const rows = await sql<
       {
@@ -188,8 +213,22 @@ export class AnalyticsService {
     }))
   }
 
-  /** Alle Buchungen des Haushalts mit Aufteilungen (Mengen sind klein: zwei Personen). */
+  /**
+   * Alle Buchungen des Haushalts mit Aufteilungen (Mengen sind klein: zwei Personen). Dazu, als
+   * `offAccount`, was über Haushaltsgrenzen hinweg zählt (FREI-22):
+   * - Aufteilungen von Buchungen anderer Haushalte in eigenen Töpfen (privat bezahlte gemeinsame
+   *   Ausgaben bzw. umgekehrt, ADR 0006). Nur der Anteil im eigenen Topf, ohne Gegenpartei:
+   *   Mehr als der Ausgleich zeigt, verlässt den anderen Haushalt nicht.
+   * - Verrechnungen mit der Einzahlung (FREI-28), im Monat von `settled_on`: im gemeinsamen
+   *   Haushalt als Einzahlung der Person, im privaten als Einzahlung ins Gemeinsame.
+   */
   private async transactions(sql: Sql, householdId: string): Promise<AnalyticsTransaction[]> {
+    type SplitJson = {
+      kind: AnalyticsTransaction['splits'][number]['kind']
+      potId: string | null
+      personId: string | null
+      amountCents: number
+    }
     const rows = await sql<
       {
         id: string
@@ -197,18 +236,16 @@ export class AnalyticsService {
         amount_cents: string
         counterparty: string | null
         recurring_series_id: string | null
-        splits: {
-          kind: AnalyticsTransaction['splits'][number]['kind']
-          potId: string | null
-          amountCents: number
-        }[]
+        off_account: boolean
+        splits: SplitJson[]
       }[]
     >`
       select t.id, t.booking_date::text, t.amount_cents,
              coalesce(t.counterparty_name, t.counterparty_iban) as counterparty,
-             t.recurring_series_id,
+             t.recurring_series_id, false as off_account,
              coalesce(
                json_agg(json_build_object('kind', s.kind, 'potId', s.pot_id,
+                                          'personId', s.person_id,
                                           'amountCents', s.amount_cents))
                  filter (where s.id is not null),
                '[]'
@@ -218,16 +255,67 @@ export class AnalyticsService {
       left join transaction_splits s on s.transaction_id = t.id
       where a.household_id = ${householdId}
       group by t.id
-      order by t.booking_date, t.id
+      union all
+      select t.id, t.booking_date::text, sum(s.amount_cents), null, t.recurring_series_id, true,
+             json_agg(json_build_object('kind', s.kind, 'potId', s.pot_id, 'personId', null,
+                                        'amountCents', s.amount_cents))
+      from transaction_splits s
+      join pots p on p.id = s.pot_id
+      join transactions t on t.id = s.transaction_id
+      join accounts a on a.id = t.account_id
+      where p.household_id = ${householdId} and a.household_id <> ${householdId}
+      group by t.id
+      order by 2, 1
     `
-    return rows.map((r) => ({
-      id: r.id,
-      bookingDate: r.booking_date,
-      amountCents: cents(r.amount_cents),
-      counterparty: r.counterparty,
-      recurringSeriesId: r.recurring_series_id,
-      splits: r.splits.map((s) => ({ ...s, amountCents: cents(s.amountCents) })),
-    }))
+    const offsets = await sql<
+      { id: string; settled_on: string; person_id: string; shared: boolean; amount_cents: string }[]
+    >`
+      select s.id, s.settled_on::text, s.person_id, s.household_id = ${householdId} as shared,
+             s.amount_cents
+      from settlements s
+      where s.kind = 'verrechnung'
+        and (s.household_id = ${householdId}
+             or s.person_id = (select owner_person_id from households
+                               where id = ${householdId} and kind = 'privat'))
+    `
+    const booked = rows.map(
+      (r): AnalyticsTransaction => ({
+        id: r.id,
+        bookingDate: r.booking_date,
+        amountCents: cents(r.amount_cents),
+        counterparty: r.counterparty,
+        recurringSeriesId: r.recurring_series_id,
+        splits: r.splits.map((s) => ({ ...s, amountCents: cents(s.amountCents) })),
+        offAccount: r.off_account,
+      }),
+    )
+    // Positiv = verrechnete Forderung (mehr Einzahlung), negativ = verrechnete Schuld.
+    const offset = offsets.map((o): AnalyticsTransaction => {
+      const amount = (o.shared ? 1 : -1) * cents(o.amount_cents)
+      return {
+        id: `verrechnung:${o.id}`,
+        bookingDate: o.settled_on,
+        amountCents: amount,
+        counterparty: null,
+        recurringSeriesId: null,
+        splits: [
+          {
+            kind: 'einzahlung',
+            potId: null,
+            personId: o.shared ? o.person_id : null,
+            amountCents: amount,
+          },
+        ],
+        offAccount: true,
+      }
+    })
+    return [...booked, ...offset].sort((a, b) =>
+      a.bookingDate === b.bookingDate
+        ? a.id.localeCompare(b.id)
+        : a.bookingDate < b.bookingDate
+          ? -1
+          : 1,
+    )
   }
 
   private async series(sql: Sql, householdId: string): Promise<AnalyticsSeries[]> {
@@ -347,7 +435,41 @@ export class AnalyticsService {
     const pots = await this.pots(this.db, householdId)
     const transactions = await this.transactions(this.db, householdId)
     const name = await this.householdName(this.db, householdId)
-    return { householdId, from, to, ...flow(transactions, pots, name, from, to) }
+    const personNames = await this.memberNames(this.db, householdId)
+    return { householdId, from, to, ...flow(transactions, pots, name, from, to, { personNames }) }
+  }
+
+  /**
+   * Geldfluss einer Person über ihre Haushalte (FREI-22): Einkommen → privat → Einzahlung →
+   * gemeinsam → gemeinsame Töpfe. Nur für die Person selbst: Er zeigt Beträge aus ihrem privaten
+   * Haushalt, und dafür gibt es keine Freigabe. Für jede andere Person 404.
+   */
+  async personFlow(
+    viewerId: string,
+    personId: string,
+    from: Month,
+    to: Month,
+  ): Promise<PersonFlowView> {
+    checkRange(from, to)
+    if (viewerId !== personId) throw personNotFound()
+    const households = await this.db<{ id: string; name: string; kind: 'privat' | 'gemeinsam' }[]>`
+      select h.id, h.name, h.kind from households h
+      join household_members m on m.household_id = h.id and m.person_id = ${personId}
+      order by h.kind desc, h.created_at, h.id
+    `
+    const own = households.find((h) => h.kind === 'privat')
+    if (!own) throw personNotFound()
+    const load = async (h: { id: string; name: string }) => ({
+      householdId: h.id,
+      name: h.name,
+      pots: await this.pots(this.db, h.id),
+      transactions: await this.transactions(this.db, h.id),
+    })
+    const shared = []
+    for (const h of households.filter((x) => x.kind === 'gemeinsam')) {
+      shared.push({ ...(await load(h)), personNames: await this.memberNames(this.db, h.id) })
+    }
+    return { personId, from, to, ...personFlow(personId, await load(own), shared, from, to) }
   }
 
   async anomalies(personId: string, householdId: string, month: Month): Promise<AnomaliesView> {

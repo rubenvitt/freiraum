@@ -102,31 +102,33 @@ const MetricsSchema = z
   })
   .openapi('Metrics')
 
+const flowNodeFields = {
+  id: z.string(),
+  label: z.string(),
+  kind: z.enum(['quelle', 'haushalt', 'einzahlung', 'gruppe', 'topf', 'rest']).openapi({
+    description:
+      '`einzahlung`: im privaten Haushalt der Abfluss ins Gemeinsame, im gemeinsamen die ' +
+      'Einzahlung einer Person (Quelle)',
+  }),
+  potId: z.uuid().nullable(),
+  potKind: PotKind.nullable(),
+}
+
+const FlowLinkSchema = z
+  .object({
+    source: z.string(),
+    target: z.string(),
+    valueCents: z.number().int().openapi({ description: 'immer positiv' }),
+  })
+  .openapi('FlowLink')
+
 const FlowSchema = z
   .object({
     householdId: z.uuid(),
     from: Month,
     to: Month,
-    nodes: z.array(
-      z
-        .object({
-          id: z.string(),
-          label: z.string(),
-          kind: z.enum(['quelle', 'haushalt', 'gruppe', 'topf', 'rest']),
-          potId: z.uuid().nullable(),
-          potKind: PotKind.nullable(),
-        })
-        .openapi('FlowNode'),
-    ),
-    links: z.array(
-      z
-        .object({
-          source: z.string(),
-          target: z.string(),
-          valueCents: z.number().int().openapi({ description: 'immer positiv' }),
-        })
-        .openapi('FlowLink'),
-    ),
+    nodes: z.array(z.object(flowNodeFields).openapi('FlowNode')),
+    links: z.array(FlowLinkSchema),
     inCents: z.number().int().openapi({ description: 'Zufluss in den Haushalt (ohne Ausgleich)' }),
     outCents: z
       .number()
@@ -136,7 +138,43 @@ const FlowSchema = z
   .openapi('Flow', {
     description:
       'Sankey: Quellen → Haushalt → Gruppen → Töpfe. Die Mitte ist ausgeglichen („Aus Erspartem“ ' +
-      'bzw. „Übrig“). Umbuchungen zwischen eigenen Konten fehlen.',
+      'bzw. „Übrig“). Umbuchungen zwischen eigenen Konten und Ausgleich fehlen; Ausgaben vom ' +
+      'Konto eines anderen Haushalts zählen beim Topf, Verrechnungen wie Einzahlungen.',
+  })
+
+const PersonFlowSchema = z
+  .object({
+    personId: z.uuid(),
+    from: Month,
+    to: Month,
+    households: z.array(
+      z
+        .object({
+          householdId: z.uuid(),
+          name: z.string(),
+          kind: z.enum(['privat', 'gemeinsam']),
+          inCents: z.number().int().openapi({ description: 'Zufluss in diesen Haushalt' }),
+          outCents: z.number().int().openapi({ description: 'Abfluss aus diesem Haushalt' }),
+        })
+        .openapi('PersonFlowHousehold'),
+    ),
+    nodes: z.array(
+      z
+        .object({
+          ...flowNodeFields,
+          id: z.string().openapi({ description: '`<householdId>/<Knoten>`' }),
+          householdId: z.uuid().openapi({ description: 'Haushalt, zu dem der Knoten gehört' }),
+        })
+        .openapi('PersonFlowNode'),
+    ),
+    links: z.array(FlowLinkSchema),
+  })
+  .openapi('PersonFlow', {
+    description:
+      'Sankey über die Haushalte einer Person: Einkommen → privater Haushalt → Töpfe und ' +
+      'Einzahlung → gemeinsamer Haushalt → gemeinsame Töpfe. Jeder Haushalt ist für sich ' +
+      'ausgeglichen. Die Einzahlung ist eine Kante zwischen den Haushaltsknoten, gezählt auf der ' +
+      'Seite des gemeinsamen Kontos (plus Verrechnungen), wie das Ist der Einzahlungsregel.',
   })
 
 const AnomaliesSchema = z
@@ -281,6 +319,29 @@ const getFlow = createRoute({
     query: range.extend({ from: Month.optional().openapi({ description: 'Standard: `to`' }) }),
   },
   responses: { 200: json(FlowSchema, 'Geldfluss'), ...common, ...rangeError },
+})
+
+const getPersonFlow = createRoute({
+  method: 'get',
+  path: '/v1/persons/{personId}/analytics/flow',
+  tags,
+  summary: 'Geldfluss über die eigenen Haushalte: privat → Einzahlung → gemeinsam',
+  description:
+    'Nur für die eigene Person. Für die andere Person gibt es keine Freigabe, die Beträge aus ' +
+    'ihrem privaten Haushalt öffnet: immer 404.',
+  security,
+  middleware: [requireAuth] as const,
+  request: {
+    params: z.object({ personId: pathId('personId') }),
+    query: range.extend({ from: Month.optional().openapi({ description: 'Standard: `to`' }) }),
+  },
+  responses: {
+    200: json(PersonFlowSchema, 'Geldfluss über Haushalte'),
+    400: error('Ungültige Anfrage'),
+    401: error('Nicht angemeldet'),
+    404: error('Person nicht gefunden (oder nicht die eigene)'),
+    ...rangeError,
+  },
 })
 
 const getAnomalies = createRoute({
@@ -450,6 +511,19 @@ export function analyticsRoutes(app: OpenAPIHono<AppEnv>): void {
     const q = c.req.valid('query')
     const to = q.to ?? currentMonth()
     const view = await c.var.analytics.flow(c.var.session.person.id, householdId, q.from ?? to, to)
+    return c.json(view, 200)
+  })
+
+  app.openapi(getPersonFlow, async (c) => {
+    const { personId } = c.req.valid('param')
+    const q = c.req.valid('query')
+    const to = q.to ?? currentMonth()
+    const view = await c.var.analytics.personFlow(
+      c.var.session.person.id,
+      personId,
+      q.from ?? to,
+      to,
+    )
     return c.json(view, 200)
   })
 
