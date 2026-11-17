@@ -329,6 +329,55 @@ final class AppModel {
         }
     }
 
+    // MARK: Töpfe einrichten
+
+    /// Topf anlegen. Ein Erst-ich-Topf füllt sich sofort aus „Noch ohne Aufgabe“.
+    func createPot(_ input: PotInput, householdId: String) async -> Bool {
+        await changePots(householdId: householdId) { service in
+            _ = try await service.createPot(householdId: householdId, input: input)
+        }
+    }
+
+    /// Topf ändern, archivieren oder wiederherstellen.
+    func updatePot(_ pot: Pot, changes: PotChanges) async -> Bool {
+        guard !changes.isEmpty else { return true }
+        return await changePots(householdId: pot.householdId) { service in
+            _ = try await service.updatePot(id: pot.id, changes: changes)
+        }
+    }
+
+    /// Reihenfolge aller aktiven Töpfe festlegen.
+    func reorderPots(householdId: String, potIds: [String]) async -> Bool {
+        await changePots(householdId: householdId) { service in
+            _ = try await service.reorderPots(householdId: householdId, potIds: potIds)
+        }
+    }
+
+    /// Archivierte Töpfe eines Haushalts; leer bei Fehler (Meldung in `errorMessage`).
+    func archivedPots(householdId: String) async -> [Pot] {
+        guard let service else { return [] }
+        do {
+            return try await service.archivedPots(householdId: householdId)
+        } catch {
+            report(error)
+            return []
+        }
+    }
+
+    /// Aktion an Töpfen ausführen, danach Töpfe und Budget des Haushalts neu laden.
+    private func changePots(householdId: String, _ action: (FreiraumService) async throws -> Void) async -> Bool {
+        guard let service else { return false }
+        do {
+            try await action(service)
+            pots[householdId] = try await service.pots(householdId: householdId)
+            await reload(householdId: householdId)
+            return true
+        } catch {
+            report(error)
+            return false
+        }
+    }
+
     private func perform(householdOf transaction: Transaction, _ action: (FreiraumService) async throws -> Void) async -> Bool {
         guard let service else { return false }
         do {
