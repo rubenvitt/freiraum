@@ -12,10 +12,31 @@ if (config.migrateOnStart) {
   if (applied.length > 0) console.log(`Migrationen angewendet: ${applied.join(', ')}`)
 }
 
-const { app, auth } = createApp({ db, config })
+const { app, auth, categorize } = createApp({ db, config })
 
 const purge = setInterval(() => auth.purgeExpired().catch(console.error), 60 * 60 * 1000)
 purge.unref()
+
+if (config.llm) {
+  console.log(`LLM-Vorschläge mit ${config.llm.model} über ${new URL(config.llm.baseUrl).host}`)
+  // Vorschläge nachholen, die beim Import am Modell gescheitert sind.
+  let retrying = false
+  const retry = setInterval(
+    async () => {
+      if (retrying) return
+      retrying = true
+      try {
+        await categorize.retryLlmSuggestions()
+      } catch (err) {
+        console.error('LLM-Vorschläge nachholen fehlgeschlagen', err)
+      } finally {
+        retrying = false
+      }
+    },
+    15 * 60 * 1000,
+  )
+  retry.unref()
+}
 
 const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
   console.log(`Freiraum-Backend hört auf Port ${info.port} (RP-ID ${config.webauthn.rpId})`)

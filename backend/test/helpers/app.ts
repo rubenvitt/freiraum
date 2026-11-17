@@ -17,6 +17,7 @@ export const testConfig: Config = {
   sessionTtlDays: 90,
   invitationTtlHours: 72,
   migrateOnStart: false,
+  llm: null,
 }
 
 export function setupTestApp(options: { llm?: LlmCategorizer } = {}) {
