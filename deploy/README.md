@@ -55,4 +55,5 @@ Migrationen laufen beim Start automatisch.
 
 Die iOS- und macOS-App brauchen Associated Domains (`webcredentials:<domain>`). Das Backend
 liefert `/.well-known/apple-app-site-association` aus, sobald `APPLE_APP_IDS` gesetzt ist
-(Format `TEAMID.bundle.id`, mehrere mit Komma).
+(Format `TEAMID.bundle.id`, mehrere mit Komma). Die Bundle-ID der App ist
+`<FREIRAUM_BUNDLE_PREFIX>.freiraum`, siehe [`apple/README.md`](../apple/README.md).

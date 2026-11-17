@@ -1,0 +1,8 @@
+// Gemeinsame Einstellungen. Eigene Werte gehören in Local.xcconfig (siehe Local.xcconfig.example),
+// die nicht eingecheckt wird.
+FREIRAUM_BUNDLE_PREFIX = dev.example
+FREIRAUM_DOMAIN = freiraum.example.org
+DEVELOPMENT_TEAM =
+CODE_SIGN_STYLE = Automatic
+
+#include? "Local.xcconfig"
