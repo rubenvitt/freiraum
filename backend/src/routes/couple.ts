@@ -104,10 +104,22 @@ const SettlementsSchema = z
           .int()
           .openapi({ description: 'privat bezahlte gemeinsame Ausgaben' }),
         repaidCents: z.number().int().openapi({ description: 'erstattet (Überweisung, von Hand)' }),
+        debtCents: z
+          .number()
+          .int()
+          .openapi({ description: 'vom gemeinsamen Konto bezahlte private Ausgaben' }),
+        paidBackCents: z
+          .number()
+          .int()
+          .openapi({ description: 'zurückgezahlt (Überweisung aufs gemeinsame Konto)' }),
         openCents: z
           .number()
           .int()
-          .openapi({ description: 'schuldet das Gemeinsame der Person noch; negativ = zu viel' }),
+          .openapi({
+            description:
+              'Saldo: positiv = schuldet das Gemeinsame der Person, negativ = schuldet die Person ' +
+              'dem Gemeinsamen',
+          }),
       }),
     ),
     openItems: z.array(
@@ -120,6 +132,22 @@ const SettlementsSchema = z
         openCents: z.number().int(),
       }),
     ),
+    openDebts: z
+      .array(
+        z.object({
+          transactionId: z.uuid(),
+          personId: z.uuid(),
+          bookingDate: IsoDate,
+          counterpartyName: z.string().nullable(),
+          amountCents: z.number().int().openapi({ description: 'privater Anteil der Buchung' }),
+          openCents: z.number().int(),
+        }),
+      )
+      .openapi({
+        description:
+          'Buchungen des gemeinsamen Kontos in privaten Töpfen, die noch nicht zurückgezahlt ' +
+          'oder mit Forderungen verrechnet sind (ohne den Topf selbst)',
+      }),
     manual: z.array(
       z.object({
         id: z.uuid(),
@@ -307,11 +335,14 @@ const getSettlements = createRoute({
   method: 'get',
   path: '/v1/households/{householdId}/settlements',
   tags: ['Paar'],
-  summary: 'Ausgleich: was das Gemeinsame jeder Person für privat bezahlte Ausgaben schuldet',
+  summary: 'Ausgleich: was das Gemeinsame und die Personen einander schulden',
   description:
-    'Entsteht, wenn eine Buchung eines privaten Kontos einem Topf des gemeinsamen Haushalts ' +
-    'zugeordnet wird. Erledigt wird er durch eine Überweisung vom gemeinsamen Konto (Art ' +
-    'ausgleich) oder von Hand. Erstattungen decken die Ausgaben der Reihe nach, älteste zuerst.',
+    'Eine Forderung entsteht, wenn eine Buchung eines privaten Kontos einem Topf des ' +
+    'gemeinsamen Haushalts zugeordnet wird. Erledigt wird sie durch eine Überweisung vom ' +
+    'gemeinsamen Konto (Art ausgleich) oder von Hand. Eine Schuld entsteht umgekehrt, wenn eine ' +
+    'Buchung des gemeinsamen Kontos dem privaten Topf einer Person zugeordnet wird; sie zahlt ' +
+    'sie per Überweisung aufs gemeinsame Konto (Art ausgleich) zurück. Forderung und Schuld ' +
+    'verrechnen sich; Erstattungen decken der Reihe nach, älteste zuerst.',
   security,
   middleware: [requireAuth] as const,
   request: { params: z.object({ householdId: pathId('householdId') }) },

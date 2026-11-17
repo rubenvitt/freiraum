@@ -5,8 +5,10 @@
  *
  * Zugriff: nur Mitglieder des Haushalts, zu dem das Konto gehört. Töpfe kommen aus dem Haushalt
  * des Kontos; ein privates Konto darf zusätzlich Töpfe des gemeinsamen Haushalts verwenden, in
- * dem die Inhaberin Mitglied ist (daraus entsteht ein Ausgleich, ADR 0006). Die Datenbank prüft
- * das zusätzlich.
+ * dem die Inhaberin Mitglied ist (daraus entsteht ein Ausgleich, ADR 0006). Umgekehrt darf ein
+ * Mitglied eine Buchung des gemeinsamen Kontos dem eigenen privaten Topf zuordnen (daraus
+ * entsteht eine Schuld ans Gemeinsame, FREI-18), nie dem Topf der anderen Person und nie per
+ * Regel. Die Datenbank prüft das zusätzlich.
  *
  * Überweisungen zwischen eigenen Konten erkennt der Abgleich über die IBAN (Umbuchung,
  * Einzahlung ins Gemeinsame, Erstattung), nach den Regeln und vor dem LLM. Solche Buchungen
@@ -24,6 +26,7 @@ import {
   bestRule,
   criteriaFromCorrection,
   describeCriteria,
+  directionOf,
   type HouseholdKind,
   type MatchableTransaction,
   type Rule,
@@ -32,6 +35,7 @@ import {
   type SplitKind,
   type Target,
   targetFits,
+  usualDirection,
 } from './rules.js'
 
 type Sql = Db | TransactionSql
@@ -308,16 +312,21 @@ export class CategorizationService {
   }
 
   /**
-   * Ziel prüfen und die Person vereinheitlichen. Ein Topf gehört zum Haushalt oder (bei privaten
-   * Haushalten) zu einem gemeinsamen, in dem die Inhaberin Mitglied ist, und ist aktiv.
-   * Einzahlung und Ausgleich gibt es nur zwischen privatem und gemeinsamem Haushalt, mit fester
-   * Richtung (`amountCents`, falls bekannt); im Gemeinsamen mit einem Mitglied als Person.
+   * Ziel prüfen und die Person vereinheitlichen. Ein Topf ist aktiv und gehört
+   * - zum Haushalt,
+   * - bei privaten Haushalten zu einem gemeinsamen, in dem die Inhaberin Mitglied ist, oder
+   * - bei gemeinsamen Haushalten zum privaten Haushalt von `actorId` (umgekehrter Ausgleich).
+   *   Für Regeln (`actorId` null) nie: Eine Regel träfe auch die Käufe der anderen Person.
+   * Einzahlung und Ausgleich gibt es nur zwischen privatem und gemeinsamem Haushalt, die
+   * Einzahlung mit fester Richtung (`amountCents`, falls bekannt); im Gemeinsamen mit einem
+   * Mitglied als Person.
    */
   private async checkTarget(
     sql: Sql,
     household: HouseholdInfo,
     target: Target,
     amountCents: number | null,
+    actorId: string | null,
   ): Promise<Target> {
     const fail = (code: string, message: string) => new ApiError(422, code, message)
     if ((target.kind === 'topf') !== (target.potId !== null)) {
@@ -329,19 +338,38 @@ export class CategorizationService {
     }
     if (target.potId !== null) {
       const [pot] = await sql<
-        { household_id: string; archived_at: Date | null; shared_member: boolean }[]
+        {
+          household_id: string
+          archived_at: Date | null
+          owner_person_id: string | null
+          shared_member: boolean
+          member_private: boolean
+        }[]
       >`
-        select p.household_id, p.archived_at,
+        select p.household_id, p.archived_at, h.owner_person_id,
           (h.kind = 'gemeinsam' and exists (
              select 1 from household_members m
              where m.household_id = h.id and m.person_id = ${household.ownerPersonId}))
-            as shared_member
+            as shared_member,
+          (h.kind = 'privat' and exists (
+             select 1 from household_members m
+             where m.household_id = ${household.id} and m.person_id = h.owner_person_id))
+            as member_private
         from pots p join households h on h.id = p.household_id
         where p.id = ${target.potId}
       `
+      const fromShared = household.kind === 'gemeinsam' && pot?.member_private === true
+      if (fromShared && actorId === null) {
+        throw fail(
+          'regel_privater_topf',
+          'Eine Regel im gemeinsamen Haushalt kann keinen privaten Topf belasten.',
+        )
+      }
       const allowed =
         pot !== undefined &&
-        (pot.household_id === household.id || (household.kind === 'privat' && pot.shared_member))
+        (pot.household_id === household.id ||
+          (household.kind === 'privat' && pot.shared_member) ||
+          (fromShared && pot.owner_person_id === actorId))
       if (!pot || !allowed) {
         throw fail('topf_anderer_haushalt', 'Der Topf gehört nicht zum Haushalt dieses Kontos.')
       }
@@ -382,6 +410,22 @@ export class CategorizationService {
     `
     if (!member) throw fail('person_ungueltig', 'Diese Person gehört nicht zum Haushalt.')
     return target
+  }
+
+  /**
+   * Einzelfälle, aus denen keine Regel entsteht (FREI-18): eine Buchung des gemeinsamen Kontos
+   * in einem privaten Topf (eine Regel träfe auch die Käufe der anderen Person) und ein Ausgleich
+   * gegen die übliche Richtung (eine Regel machte aus künftigen Einzahlungen Rückzahlungen).
+   */
+  private async isOneOff(sql: Sql, household: HouseholdInfo, split: Split): Promise<boolean> {
+    if (split.kind === 'ausgleich') {
+      return directionOf(split.amountCents) !== usualDirection(split.kind, household.kind)
+    }
+    if (split.potId === null || household.kind !== 'gemeinsam') return false
+    const [other] = await sql`
+      select 1 from pots where id = ${split.potId} and household_id <> ${household.id}
+    `
+    return other !== undefined
   }
 
   /**
@@ -865,7 +909,7 @@ export class CategorizationService {
       const checked: Split[] = []
       for (const s of splits) {
         checked.push({
-          ...(await this.checkTarget(tx, household, s, s.amountCents)),
+          ...(await this.checkTarget(tx, household, s, s.amountCents, personId)),
           amountCents: s.amountCents,
         })
       }
@@ -884,7 +928,8 @@ export class CategorizationService {
       const corrected =
         checked.length === 1 &&
         only !== undefined &&
-        (!before?.suggestion || !sameTarget(before.suggestion, only))
+        (!before?.suggestion || !sameTarget(before.suggestion, only)) &&
+        !(await this.isOneOff(tx, household, only))
       const criteria = corrected && options.learn ? criteriaFromCorrection(toMatchable(t)) : null
       if (criteria && only) {
         rule = await this.upsertRule(tx, t.household_id, personId, criteria, only, 'korrektur')
@@ -997,21 +1042,21 @@ export class CategorizationService {
         household,
         { kind: input.kind, potId: input.potId, personId: input.personId ?? null },
         null,
+        null,
       )
-      // Einzahlung und Ausgleich haben eine feste Richtung; die Regel bekommt sie als Merkmal.
+      // Die Einzahlung hat eine feste Richtung; die Regel bekommt sie als Merkmal. Ein Ausgleich
+      // ohne eigene Richtung bekommt die übliche (Erstattung ans Private).
       const required = requiredDirection(target.kind, household.kind)
-      if (required !== null) {
-        if (criteria.direction !== null && criteria.direction !== required) {
-          throw new ApiError(
-            422,
-            'richtung_unpassend',
-            `${KIND_LABEL[target.kind]} ist in diesem Haushalt immer ein ${
-              required === 'eingang' ? 'Eingang' : 'Ausgang'
-            }.`,
-          )
-        }
-        criteria.direction = required
+      if (required !== null && criteria.direction !== null && criteria.direction !== required) {
+        throw new ApiError(
+          422,
+          'richtung_unpassend',
+          `${KIND_LABEL[target.kind]} ist in diesem Haushalt immer ein ${
+            required === 'eingang' ? 'Eingang' : 'Ausgang'
+          }.`,
+        )
       }
+      criteria.direction ??= usualDirection(target.kind, household.kind)
       if (criteria.accountId !== null) {
         const [account] = await tx`
           select 1 from accounts where id = ${criteria.accountId} and household_id = ${householdId}
@@ -1096,12 +1141,13 @@ export class CategorizationService {
       if (existing) return { transactionId: existing.id, created: false }
 
       // Wie bei Bankbuchungen darf ein privates Bargeldkonto auch einen gemeinsamen Topf
-      // verwenden; daraus entsteht ein Ausgleich (ADR 0006).
+      // verwenden (Ausgleich, ADR 0006) und ein gemeinsames den eigenen privaten (FREI-18).
       const target = await this.checkTarget(
         tx,
         await this.household(tx, account.household_id),
         { kind: 'topf', potId: input.potId, personId: null },
         -input.amountCents,
+        personId,
       )
       const description = input.description?.trim() || null
       const [row] = await tx<{ id: string }[]>`

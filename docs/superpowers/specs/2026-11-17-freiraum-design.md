@@ -49,7 +49,7 @@ Beträge immer als ganze Cent (Integer), Währung EUR.
 - **Topf**: gehört einem Haushalt. Typ: `monatlich` (z. B. Lebensmittel), `rücklage` (unregelmäßige Kosten, Monatsrate aus Jahresbetrag), `ziel` (Zielbetrag und Zieldatum), `erst_ich` (wird zuerst gefüllt). Gruppen zur Ordnung.
 - **Zuweisung**: Betrag für Topf und Monat. Verfügbar im Topf = Übertrag aus dem Vormonat + Zuweisung − Ausgaben.
 - **Einzahlungsregel**: wie viel eine Person ins Gemeinsame gibt: fester Betrag oder Prozent vom Netto, gültig ab einem Monat. Jede Person setzt ihre eigene.
-- **Ausgleich**: entsteht, wenn eine Buchung von einem privaten Konto einem gemeinsamen Topf zugeordnet wird. Wird erledigt, sobald eine passende Überweisung erkannt oder manuell verbucht wird.
+- **Ausgleich**: entsteht, wenn eine Buchung von einem privaten Konto einem gemeinsamen Topf zugeordnet wird. Wird erledigt, sobald eine passende Überweisung erkannt oder manuell verbucht wird. Umgekehrt entsteht eine Schuld der Person ans Gemeinsame, wenn sie eine Buchung des gemeinsamen Kontos (etwa mit dessen Karte bezahlt) ihrem privaten Topf zuordnet; Forderung und Schuld verrechnen sich.
 - **Freigabe**: Person A gibt Person B eine Kennzahl oder Sicht frei (z. B. Sparquote, „Erst ich erledigt“, Rücklagen gedeckt). Ohne Freigabe sieht B nichts aus A's privatem Haushalt.
 - **Regel**: Kategorisierungsregel (Muster auf Gegenpartei, Verwendungszweck, Betrag, Konto → Topf und Haushalt).
 - **Vorschlag**: Topf-Vorschlag zu einer Buchung mit Quelle (`regel` oder `llm`), Konfidenz und Begründung in einem Satz.
@@ -113,3 +113,4 @@ Das Repo ist öffentlich. Deshalb: keine echten Finanzdaten, Kontonamen oder Zug
 - ~~Bankanbieter~~: Enable Banking für alle Konten, siehe [ADR 0002](../../adr/0002-bankanbindung.md)
 - ~~Welches LLM für Vorschläge, lokal oder per API~~: OpenRouter, Modell per Konfiguration, siehe [ADR 0003](../../adr/0003-budget-kern.md)
 - Standard-Einzahlungsregel fürs Gemeinsame: gemeinsam absprechen und als Regel je Person eintragen (kein Standard im Code, ADR 0006)
+- Ausgleich mit der nächsten Einzahlung verrechnen statt zurückzuüberweisen: Vorschlag in ADR 0006 („Umgekehrter Ausgleich“), noch nicht umgesetzt

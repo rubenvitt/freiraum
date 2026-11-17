@@ -1,6 +1,6 @@
 # ADR 0006: Paar-Modell (E4)
 
-Stand: 17.11.2026 · Status: vorgeschlagen (mit FREI-5)
+Stand: 17.11.2026 · Status: vorgeschlagen (mit FREI-5, ergänzt mit FREI-18)
 
 ## Kontext
 
@@ -22,7 +22,8 @@ erledigt ist und was eine Freigabe genau öffnet.
 
 - Die Richtung ist je Art fest. Die Datenbank prüft sie (Constraint-Trigger), Regeln bekommen sie
   als Merkmal, und eine Regel, deren Ziel nicht zur Richtung passt, greift nicht. So kann eine
-  Regel einen Import nie scheitern lassen.
+  Regel einen Import nie scheitern lassen. Seit FREI-18 gilt das nur noch für die Einzahlung;
+  der Ausgleich geht auch in Gegenrichtung (Rückzahlung, siehe „Umgekehrter Ausgleich“).
 - Auf gemeinsamen Konten nennt `personId`, von wem bzw. an wen das Geld geht. Auf privaten Konten
   ist es immer die Inhaberin; dort bleibt das Feld leer.
 - Eine Einzahlung ist **keine negative Einnahme**. Der Erst-ich-Anteil rechnet mit den vollen
@@ -70,6 +71,46 @@ Buchungen von Hand zu (oder legt eine Regel an, die sie neu vorschlägt).
   keiner einzelnen Ausgabe zugeordnet; sie decken die Ausgaben der Reihe nach, älteste zuerst.
   Ändert sich eine Aufteilung später, stimmt der Stand trotzdem.
 
+### Umgekehrter Ausgleich (FREI-18)
+
+Zahlt jemand mit der Karte des gemeinsamen Kontos etwas Privates, ordnet die Person die Buchung
+ihrem eigenen privaten Topf zu (auch teilweise).
+
+- Der private Topf trägt die Ausgabe. Das gemeinsame Budget bleibt unberührt: Das Geld ist eine
+  **Schuld der Person ans Gemeinsame**, keine gemeinsame Ausgabe. Das ist das Spiegelbild der
+  Forderung oben.
+- Nur die Inhaberin wählt ihren privaten Topf, nie die andere Person (422
+  `topf_anderer_haushalt`). Die Datenbank lässt nur private Töpfe von Mitgliedern zu.
+- **Keine Regel.** Eine Regel im gemeinsamen Haushalt träfe auch die Käufe der anderen Person
+  bei derselben Gegenpartei. Korrekturen lernen deshalb nichts, und eine Regel mit privatem Topf
+  im Gemeinsamen wird abgelehnt (422 `regel_privater_topf`).
+- Zurückgezahlt wird per Überweisung vom privaten aufs gemeinsame Konto mit der Art
+  `ausgleich`. **Der Ausgleich hat deshalb keine feste Richtung mehr**: Ausgang vom gemeinsamen
+  Konto = Erstattung an die Person, Eingang = Rückzahlung der Person. Auf beiden Seiten ohne
+  Wirkung aufs Budget. Die Einzahlung behält ihre feste Richtung.
+- Der Abgleich schlägt für Überweisungen aufs gemeinsame Konto weiter `einzahlung` vor; eine
+  Rückzahlung korrigiert man von Hand. Diese Korrektur lernt keine Regel, sonst würden künftige
+  Einzahlungen zu Rückzahlungen. Regeln für den Ausgleich ohne eigene Richtung bekommen die
+  übliche (Erstattung ans Private).
+- Im Ausgleich steht je Person ein **Saldo**: Forderung − Erstattungen − (Schuld −
+  Rückzahlungen). Positiv schuldet das Gemeinsame der Person etwas, negativ die Person dem
+  Gemeinsamen. Forderung und Schuld verrechnen sich gegenseitig, jeweils älteste Buchung zuerst.
+  Offene Schulden stehen getrennt von den offenen Forderungen (`openDebts`).
+- Von Hand verbuchen lässt sich weiterhin nur eine eigene Forderung, höchstens der Saldo.
+- Privatsphäre: Die Buchung gehört zum gemeinsamen Konto, beide sehen sie ohnehin. Vom privaten
+  Topf ist dort nur die ID zu sehen. Budget und Töpfe des privaten Haushalts bleiben ohne
+  Freigabe `budget` „nicht gefunden“. Der Ausgleich nennt den Topf gar nicht.
+
+**Verrechnen mit der Einzahlung (Vorschlag, nicht umgesetzt).** Statt 50 € zurückzuüberweisen
+und 500 € einzuzahlen, zahlt man 450 € ein und verrechnet 50 €. Damit beide Budgets stimmen,
+muss der verrechnete Betrag **wie eine Einzahlung zählen**: im Gemeinsamen als Einnahme, im
+Privaten als Minderung von „Noch ohne Aufgabe“, im Ist der Einzahlungsregel, und zugleich als
+Erstattung bzw. Rückzahlung im Ausgleich. Sonst fehlt dem Gemeinsamen Budget, das auf dem Konto
+liegt (oder umgekehrt). Das ginge als eigene Art eines von Hand verbuchten Ausgleichs
+(`settlements.kind = 'verrechnung'`), den die Budgetrechnung beider Haushalte mitliest. Ob das
+die Überweisungen im Alltag spart, entscheiden die beiden Personen; bis dahin bleibt es bei
+Überweisungen.
+
 ### Freigaben
 
 | Freigabe | Was die andere Person sieht |
@@ -98,8 +139,12 @@ Buchungen von Hand zu (oder legt eine Regel an, die sie neu vorschlägt).
   sind Forderungen zwischen den Personen und rechnen unabhängig davon.
 - Die Sparquote ist seit E5 definiert ([ADR 0005](0005-auswertungen.md)), als Freigabe aber noch
   nicht ergänzt.
-- Ausgaben vom gemeinsamen Konto für einen privaten Topf (umgekehrter Ausgleich) und das Verrechnen
-  eines Ausgleichs mit der nächsten Einzahlung sind nicht umgesetzt.
+- Ausgaben vom gemeinsamen Konto für einen privaten Topf (umgekehrter Ausgleich) sind seit
+  FREI-18 umgesetzt (Migration 0007). Das Verrechnen eines Ausgleichs mit der nächsten Einzahlung
+  ist als Vorschlag beschrieben, aber nicht umgesetzt.
+- Die Auswertungen rechnen weiter je Haushalt der Konten. Ausgaben über Haushaltsgrenzen
+  (gemeinsamer Topf vom privaten Konto und umgekehrt) erscheinen dort beim Konto, nicht beim
+  Topf; das gehört zu den Auswertungen über Haushalte hinweg (FREI-22).
 - Das LLM bekommt weiterhin nur die Töpfe des Haushalts, zu dem das Konto gehört, also keine
   gemeinsamen Töpfe bei privaten Konten. Ob das reicht, zeigt der Alltag.
 - Welche Einzahlungsregel gilt, legen die beiden Personen gemeinsam fest; die Spec führt das

@@ -11,6 +11,8 @@
  *   sieht es nur mit der Freigabe `einzahlung_soll`; ein fester Betrag ist ohnehin bekannt.
  * - Wer eine private Buchung einem gemeinsamen Topf zuordnet, macht sie fürs Gemeinsame
  *   sichtbar, aber nur Datum, Gegenpartei und den gemeinsamen Anteil, nicht Konto oder Zweck.
+ * - Umgekehrt (FREI-18): Eine Buchung des gemeinsamen Kontos im privaten Topf einer Person zeigt
+ *   der Ausgleich als Schuld mit Datum, Gegenpartei und privatem Anteil, ohne den Topf.
  */
 import type { TransactionSql } from 'postgres'
 import { computeMonth, type PotKind } from '../budget/compute.js'
@@ -98,7 +100,14 @@ export interface SettlementBalance {
   claimedCents: number
   /** erstattet: Überweisungen vom gemeinsamen Konto plus von Hand verbucht */
   repaidCents: number
-  /** schuldet das Gemeinsame der Person noch (negativ = zu viel erstattet) */
+  /** vom gemeinsamen Konto bezahlte private Ausgaben (abzüglich Gutschriften), FREI-18 */
+  debtCents: number
+  /** zurückgezahlt: Überweisungen der Person aufs gemeinsame Konto (Art `ausgleich`) */
+  paidBackCents: number
+  /**
+   * Saldo: schuldet das Gemeinsame der Person noch (positiv) oder die Person dem Gemeinsamen
+   * (negativ). Forderung und Schuld verrechnen sich.
+   */
   openCents: number
 }
 
@@ -108,6 +117,17 @@ export interface OpenClaim {
   bookingDate: IsoDate
   counterpartyName: string | null
   /** gemeinsamer Anteil der Buchung */
+  amountCents: number
+  openCents: number
+}
+
+/** Offene Schuld: Buchung des gemeinsamen Kontos im privaten Topf der Person. */
+export interface OpenDebt {
+  transactionId: string
+  personId: string
+  bookingDate: IsoDate
+  counterpartyName: string | null
+  /** privater Anteil der Buchung */
   amountCents: number
   openCents: number
 }
@@ -125,6 +145,7 @@ export interface SettlementsView {
   householdId: string
   balances: SettlementBalance[]
   openItems: OpenClaim[]
+  openDebts: OpenDebt[]
   manual: ManualSettlement[]
 }
 
@@ -491,7 +512,9 @@ export class CoupleService {
   /**
    * Was das Gemeinsame jeder Person schuldet: Ausgaben von privaten Konten in gemeinsamen
    * Töpfen minus Erstattungen (Überweisungen vom gemeinsamen Konto und von Hand verbucht).
-   * Alles wird aus den Aufteilungen neu gerechnet, nichts fortgeschrieben.
+   * Umgekehrt mindern Ausgaben vom gemeinsamen Konto in privaten Töpfen den Saldo, bis die
+   * Person sie zurückzahlt (FREI-18). Alles wird aus den Aufteilungen neu gerechnet, nichts
+   * fortgeschrieben.
    */
   async settlements(viewerId: string, householdId: string): Promise<SettlementsView> {
     await this.sharedHousehold(this.db, viewerId, householdId)
@@ -524,8 +547,32 @@ export class CoupleService {
       group by t.id, h.owner_person_id
       order by t.booking_date, t.created_at, t.id
     `
-    const transfers = await sql<{ person_id: string; amount_cents: string }[]>`
-      select s.person_id, -sum(s.amount_cents) as amount_cents
+    const debts = await sql<
+      {
+        transaction_id: string
+        person_id: string
+        booking_date: string
+        counterparty_name: string | null
+        amount_cents: string
+      }[]
+    >`
+      select t.id as transaction_id, hp.owner_person_id as person_id, t.booking_date::text,
+             t.counterparty_name, -sum(s.amount_cents) as amount_cents
+      from transaction_splits s
+      join pots p on p.id = s.pot_id
+      join households hp on hp.id = p.household_id
+      join transactions t on t.id = s.transaction_id
+      join accounts a on a.id = t.account_id
+      where a.household_id = ${householdId} and hp.kind = 'privat'
+      group by t.id, hp.owner_person_id
+      order by t.booking_date, t.created_at, t.id
+    `
+    // Gezählt wird die Seite des gemeinsamen Kontos: Ausgang = Erstattung an die Person,
+    // Eingang = Rückzahlung der Person.
+    const transfers = await sql<{ person_id: string; repaid: string; paid_back: string }[]>`
+      select s.person_id,
+             coalesce(-sum(s.amount_cents) filter (where s.amount_cents < 0), 0) as repaid,
+             coalesce(sum(s.amount_cents) filter (where s.amount_cents > 0), 0) as paid_back
       from transaction_splits s
       join transactions t on t.id = s.transaction_id
       join accounts a on a.id = t.account_id
@@ -548,47 +595,61 @@ export class CoupleService {
     `
     const balances: SettlementBalance[] = []
     const openItems: OpenClaim[] = []
+    const openDebts: OpenDebt[] = []
+    const sumCents = (rows: { amount_cents: string }[]) =>
+      rows.reduce((sum, r) => sum + cents(r.amount_cents), 0)
     for (const m of members) {
       const own = claims.filter((c) => c.person_id === m.id)
-      const claimed = own.reduce((sum, c) => sum + cents(c.amount_cents), 0)
+      const owed = debts.filter((d) => d.person_id === m.id)
+      const transfer = transfers.find((t) => t.person_id === m.id)
+      const claimed = sumCents(own)
+      const debt = sumCents(owed)
       const repaid =
-        cents(transfers.find((t) => t.person_id === m.id)?.amount_cents ?? 0) +
-        manual
-          .filter((s) => s.person_id === m.id)
-          .reduce((sum, s) => sum + cents(s.amount_cents), 0)
+        cents(transfer?.repaid ?? 0) + sumCents(manual.filter((s) => s.person_id === m.id))
+      const paidBack = cents(transfer?.paid_back ?? 0)
       balances.push({
         personId: m.id,
         displayName: m.display_name,
         claimedCents: claimed,
         repaidCents: repaid,
-        openCents: claimed - repaid,
+        debtCents: debt,
+        paidBackCents: paidBack,
+        openCents: claimed - repaid - (debt - paidBack),
       })
-      const open = openClaims(
-        own.map((c) => ({ id: c.transaction_id, amountCents: cents(c.amount_cents) })),
-        repaid,
-      )
-      for (const c of own) {
-        const rest = open.get(c.transaction_id)
-        if (rest === undefined) continue
-        openItems.push({
-          transactionId: c.transaction_id,
-          personId: m.id,
-          bookingDate: c.booking_date,
-          counterpartyName: c.counterparty_name,
-          amountCents: cents(c.amount_cents),
-          openCents: rest,
+      // Forderung und Schuld decken sich gegenseitig, jeweils älteste zuerst.
+      const items = (rows: typeof own, credit: number) => {
+        const open = openClaims(
+          rows.map((r) => ({ id: r.transaction_id, amountCents: cents(r.amount_cents) })),
+          credit,
+        )
+        return rows.flatMap((r) => {
+          const rest = open.get(r.transaction_id)
+          return rest === undefined
+            ? []
+            : [
+                {
+                  transactionId: r.transaction_id,
+                  personId: m.id,
+                  bookingDate: r.booking_date,
+                  counterpartyName: r.counterparty_name,
+                  amountCents: cents(r.amount_cents),
+                  openCents: rest,
+                },
+              ]
         })
       }
+      openItems.push(...items(own, repaid + debt - paidBack))
+      openDebts.push(...items(owed, paidBack + claimed - repaid))
     }
-    openItems.sort(
-      (a, b) =>
-        b.bookingDate.localeCompare(a.bookingDate) ||
-        a.transactionId.localeCompare(b.transactionId),
-    )
+    const newestFirst = (a: OpenClaim, b: OpenClaim) =>
+      b.bookingDate.localeCompare(a.bookingDate) || a.transactionId.localeCompare(b.transactionId)
+    openItems.sort(newestFirst)
+    openDebts.sort(newestFirst)
     return {
       householdId,
       balances,
       openItems,
+      openDebts,
       manual: manual.map((s) => ({
         id: s.id,
         personId: s.person_id,
