@@ -28,16 +28,24 @@ struct SettlementCard: View {
 }
 
 /// Ausgleich im gemeinsamen Haushalt: wer wem wie viel schuldet, offene Forderungen und Schulden.
+/// Eigener Saldo lässt sich von Hand verbuchen (bar erhalten, mit der Einzahlung verrechnen),
+/// eigene von Hand verbuchte Einträge lassen sich zurücknehmen.
 struct SettlementView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @State private var recording: SettlementDraft?
+    @State private var undoing: SettlementState.ManualRow?
+    @State private var busy = false
+
+    private var household: Household? {
+        model.households.first { $0.kind == .gemeinsam }
+    }
 
     var body: some View {
         NavigationStack {
             Group {
-                if let household = model.households.first(where: { $0.kind == .gemeinsam }),
-                   let state = model.settlementState(for: household) {
-                    list(state)
+                if let household, let state = model.settlementState(for: household) {
+                    list(state, household: household)
                 } else {
                     ContentUnavailableView("Kein Ausgleich", systemImage: "arrow.left.arrow.right",
                                            description: Text("Es gibt noch keinen gemeinsamen Haushalt."))
@@ -53,10 +61,28 @@ struct SettlementView: View {
                 }
             }
             .refreshable { await model.load() }
+            .onAppear { model.errorMessage = nil }
+            .sheet(item: $recording) { draft in
+                if let household {
+                    SettlementEditor(household: household, draft: draft)
+                }
+            }
+            .confirmationDialog(
+                undoing.map { "„\($0.title)“ zurücknehmen?" } ?? "",
+                isPresented: Binding(get: { undoing != nil }, set: { if !$0 { undoing = nil } }),
+                titleVisibility: .visible,
+                presenting: undoing
+            ) { row in
+                Button("Zurücknehmen", role: .destructive) { undo(row) }
+            } message: { row in
+                Text(row.isOffset
+                    ? "Der Betrag ist danach wieder offen. Einzahlung (Ist) und dein privates Budget rechnen ohne die Verrechnung."
+                    : "Der Betrag ist danach wieder offen.")
+            }
         }
     }
 
-    private func list(_ state: SettlementState) -> some View {
+    private func list(_ state: SettlementState, household: Household) -> some View {
         List {
             Section {
                 ForEach(state.balances) { row in
@@ -64,6 +90,25 @@ struct SettlementView: View {
                 }
             } footer: {
                 Text("Forderungen und Schulden verrechnen sich. Erstattungen und Rückzahlungen decken die ältesten Buchungen zuerst.")
+            }
+
+            if let settlements = model.settlements[household.id],
+               let draft = SettlementDraft(settlements, me: model.person) {
+                Section {
+                    Button(draft.title, systemImage: draft.isClaim ? "banknote" : "arrow.uturn.left") {
+                        model.errorMessage = nil
+                        recording = draft
+                    }
+                    .disabled(busy)
+                } footer: {
+                    Text(draft.isClaim
+                        ? "Bar bekommen oder mit deiner Einzahlung verrechnet? Hier eintragen, dann stimmt der Saldo."
+                        : "Statt extra zu überweisen: mit deiner Einzahlung ins Gemeinsame verrechnen.")
+                }
+            }
+
+            if let message = model.errorMessage {
+                Section { ErrorBanner(message: message) }
             }
 
             if !state.debts.isEmpty {
@@ -87,7 +132,7 @@ struct SettlementView: View {
             }
 
             if !state.manual.isEmpty {
-                Section("Von Hand verbucht") {
+                Section {
                     ForEach(state.manual) { row in
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
@@ -98,9 +143,134 @@ struct SettlementView: View {
                             Text(row.amount).monospacedDigit().foregroundStyle(Theme.text)
                         }
                         .accessibilityElement(children: .combine)
+                        .swipeActions {
+                            if row.deletable {
+                                Button("Zurücknehmen", systemImage: "arrow.uturn.backward", role: .destructive) {
+                                    undoing = row
+                                }
+                            }
+                        }
+                        .contextMenu {
+                            if row.deletable {
+                                Button("Zurücknehmen", systemImage: "arrow.uturn.backward", role: .destructive) {
+                                    undoing = row
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Von Hand verbucht")
+                } footer: {
+                    if state.manual.contains(where: \.deletable) {
+                        Text("Eigene Einträge zum Zurücknehmen nach links wischen.")
                     }
                 }
             }
+        }
+    }
+
+    private func undo(_ row: SettlementState.ManualRow) {
+        guard let household else { return }
+        busy = true
+        Task {
+            _ = await model.deleteSettlement(row, householdId: household.id)
+            busy = false
+        }
+    }
+}
+
+/// Eigenen Ausgleich von Hand verbuchen: Art (bar erhalten oder mit der Einzahlung verrechnen),
+/// Betrag (höchstens der offene Saldo), Tag, Notiz.
+struct SettlementEditor: View {
+    let household: Household
+
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: SettlementDraft
+    @State private var date = Date()
+    @State private var busy = false
+    @FocusState private var amountFocused: Bool
+
+    init(household: Household, draft: SettlementDraft) {
+        self.household = household
+        _draft = State(initialValue: draft)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    if draft.kinds.count > 1 {
+                        Picker("Art", selection: $draft.kind) {
+                            ForEach(draft.kinds, id: \.self) { kind in
+                                Text(SettlementDraft.title(kind)).tag(kind)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    } else {
+                        LabeledContent("Art", value: SettlementDraft.title(draft.kind))
+                    }
+                } footer: {
+                    Text(draft.hint)
+                }
+
+                Section {
+                    HStack(alignment: .firstTextBaseline) {
+                        TextField("0,00", text: $draft.amountText)
+                            #if os(iOS)
+                            .keyboardType(.decimalPad)
+                            #endif
+                            .font(.system(size: 44, weight: .semibold))
+                            .monospacedDigit()
+                            .focused($amountFocused)
+                            .accessibilityLabel("Betrag in Euro")
+                        Text("€").font(.title).foregroundStyle(Theme.secondary)
+                    }
+                    DatePicker("Tag", selection: $date, in: ...Date(), displayedComponents: .date)
+                    TextField("Notiz (z. B. bar beim Grillabend)", text: $draft.note)
+                } footer: {
+                    Text("Offen: \(Money.format(draft.maxCents, style: .exact)). Mehr lässt sich nicht verbuchen.")
+                }
+
+                if let problem = draft.problem, !draft.amountText.isEmpty {
+                    Section {
+                        Text(problem).font(.footnote).foregroundStyle(Theme.warning)
+                    }
+                }
+
+                if let message = model.errorMessage {
+                    Section { ErrorBanner(message: message) }
+                }
+            }
+            .navigationTitle(draft.title)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Abbrechen") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Verbuchen") { save() }
+                        .disabled(busy || draft.input == nil)
+                }
+            }
+            .onAppear {
+                model.errorMessage = nil
+                amountFocused = true
+            }
+        }
+    }
+
+    private func save() {
+        draft.settledOn = GermanDates.isoDate(date)
+        guard let input = draft.input else { return }
+        busy = true
+        Task {
+            let ok = await model.recordSettlement(householdId: household.id, input: input)
+            busy = false
+            if ok { dismiss() }
         }
     }
 }

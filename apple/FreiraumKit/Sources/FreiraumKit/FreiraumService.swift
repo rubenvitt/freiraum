@@ -268,6 +268,31 @@ public final class FreiraumService: Sendable {
         }
     }
 
+    /// Ausgleich von Hand verbuchen (bar erhalten) oder mit der Einzahlung verrechnen, nur für den
+    /// eigenen Saldo und höchstens so viel, wie offen ist (sonst 422). Eine Verrechnung in einem
+    /// abgeschlossenen Monat lehnt der Server mit 409 ab. Liefert den Stand danach.
+    public func recordSettlement(householdId: String, input: SettlementInput) async throws(APIError) -> Settlements {
+        try await call {
+            let out = try await client.postV1HouseholdsHouseholdIdSettlements(
+                path: .init(householdId: householdId),
+                body: .json(.init(
+                    amountCents: input.amountCents, kind: try apiEnum(input.kind.rawValue),
+                    settledOn: input.settledOn, note: input.note
+                ))
+            )
+            guard case let .created(created) = out else { throw unexpected(out) }
+            return try Settlements(try created.body.json)
+        }
+    }
+
+    /// Eigenen von Hand verbuchten Ausgleich zurücknehmen; fremde lehnt der Server ab (403).
+    public func deleteSettlement(id: String) async throws(APIError) {
+        try await call {
+            let out = try await client.deleteV1SettlementsSettlementId(path: .init(settlementId: id))
+            guard case .noContent = out else { throw unexpected(out) }
+        }
+    }
+
     // MARK: - Einzahlungen ins Gemeinsame
 
     /// Einzahlungsregeln beider Personen im gemeinsamen Haushalt, mit Historie.

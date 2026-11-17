@@ -508,6 +508,49 @@ final class AppModel {
         }
     }
 
+    // MARK: Ausgleich von Hand
+
+    /// Eigenen Ausgleich von Hand verbuchen (bar erhalten) oder mit der Einzahlung verrechnen.
+    func recordSettlement(householdId: String, input: SettlementInput) async -> Bool {
+        await changeSettlements(householdId: householdId, offset: input.kind == .verrechnung) { service in
+            // Die Antwort ist schon der Stand danach.
+            self.settlements[householdId] = try await service.recordSettlement(householdId: householdId, input: input)
+            return false
+        }
+    }
+
+    /// Eigenen von Hand verbuchten Ausgleich zurücknehmen.
+    func deleteSettlement(_ row: SettlementState.ManualRow, householdId: String) async -> Bool {
+        await changeSettlements(householdId: householdId, offset: row.isOffset) { service in
+            try await service.deleteSettlement(id: row.id)
+            return true
+        }
+    }
+
+    /// Aktion am Ausgleich ausführen (liefert, ob der Ausgleich neu zu laden ist). Eine
+    /// Verrechnung ändert Ist und Budget im gemeinsamen und im privaten Haushalt; `reload` lädt
+    /// beide samt Ausgleich und Einzahlungen neu. Ein Fehler beim Nachladen zeigt nur die Meldung:
+    /// Gebucht ist dann schon, ein zweiter Versuch würde doppelt buchen.
+    private func changeSettlements(
+        householdId: String, offset: Bool, _ action: (FreiraumService) async throws -> Bool
+    ) async -> Bool {
+        guard let service else { return false }
+        errorMessage = nil
+        let needsSettlements: Bool
+        do {
+            needsSettlements = try await action(service)
+        } catch {
+            report(error)
+            return false
+        }
+        if offset {
+            await reload(householdIds: Set([householdId, privateHousehold?.id].compactMap { $0 }))
+        } else if needsSettlements {
+            do { try await loadSettlements() } catch { report(error) }
+        }
+        return true
+    }
+
     // MARK: Einzahlungen ins Gemeinsame
 
     /// Regeln mit Historie und Freigaben laden (für die Ansicht „Einzahlungen“).

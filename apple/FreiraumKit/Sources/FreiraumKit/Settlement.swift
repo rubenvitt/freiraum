@@ -140,6 +140,10 @@ public struct SettlementState: Hashable, Sendable {
         public let title: String
         public let subtitle: String
         public let amount: String
+        /// Eigener Eintrag: lässt sich zurücknehmen (fremde lehnt der Server mit 403 ab).
+        public let deletable: Bool
+        /// Mit der Einzahlung verrechnet: Zurücknehmen ändert Ist und privates Budget.
+        public let isOffset: Bool
     }
 
     public let balances: [BalanceRow]
@@ -201,7 +205,9 @@ public struct SettlementState: Hashable, Sendable {
                 title: note ?? what,
                 subtitle: "\(GermanDates.bookingDay(m.settledOn, today: today)) · \(name(m.personId))"
                     + (note == nil ? "" : " · \(what)"),
-                amount: Money.format(abs(m.amountCents), style: .exact)
+                amount: Money.format(abs(m.amountCents), style: .exact),
+                deletable: me != nil && m.personId == me?.id,
+                isOffset: m.kind == .verrechnung
             )
         }
     }
@@ -235,5 +241,107 @@ public struct SettlementState: Hashable, Sendable {
             amount: direction == .settled ? "" : amount,
             detail: parts.isEmpty ? nil : parts.joined(separator: " · "), hint: hint
         )
+    }
+}
+
+// MARK: - Von Hand verbuchen
+
+/// Ausgleich von Hand zum Senden (`POST /v1/households/{id}/settlements`). Der Betrag ist immer
+/// positiv; die Richtung einer Verrechnung ergibt der Server aus dem Saldo.
+public struct SettlementInput: Hashable, Sendable {
+    public let amountCents: Int
+    public let kind: Settlements.Manual.Kind
+    public let settledOn: String
+    public let note: String?
+
+    public init(amountCents: Int, kind: Settlements.Manual.Kind, settledOn: String, note: String? = nil) {
+        self.amountCents = amountCents
+        self.kind = kind
+        self.settledOn = settledOn
+        self.note = note
+    }
+}
+
+/// Eingabe „Von Hand verbuchen“ für den eigenen Saldo. Gibt es nur, wenn er offen ist:
+/// - Forderung (das Gemeinsame schuldet mir): bar erhalten oder mit der Einzahlung verrechnen.
+/// - Schuld (ich schulde dem Gemeinsamen): nur mit der Einzahlung verrechnen; eine Rückzahlung
+///   außerhalb der Konten bestätigt sonst niemand.
+/// Höchstens so viel, wie offen ist (sonst 422 vom Server).
+public struct SettlementDraft: Hashable, Sendable, Identifiable {
+    /// Es gibt höchstens einen Entwurf zugleich (für `.sheet(item:)`).
+    public var id: String { "ausgleich" }
+    /// Eigener Saldo: positiv = Forderung, negativ = Schuld
+    public let openCents: Int
+    public var kind: Settlements.Manual.Kind
+    /// Euro, vorbelegt mit dem ganzen offenen Betrag
+    public var amountText: String
+    /// Tag als JJJJ-MM-TT; bei einer Verrechnung zählt sein Monat für Ist und Budget
+    public var settledOn: String
+    public var note: String = ""
+
+    /// nil, wenn der eigene Saldo ausgeglichen ist oder die Person nicht im Haushalt ist.
+    public init?(_ s: Settlements, me: Person?, today: String = GermanDates.isoDate(Date())) {
+        guard let me, let open = s.balances.first(where: { $0.personId == me.id })?.openCents, open != 0 else {
+            return nil
+        }
+        openCents = open
+        kind = open > 0 ? .zahlung : .verrechnung
+        amountText = Money.number(abs(open))
+        settledOn = today
+    }
+
+    /// Höchstbetrag in Cent
+    public var maxCents: Int { abs(openCents) }
+
+    public var isClaim: Bool { openCents > 0 }
+
+    /// Was zur Wahl steht: bei einer Forderung beides, bei einer Schuld nur die Verrechnung.
+    public var kinds: [Settlements.Manual.Kind] { isClaim ? [.zahlung, .verrechnung] : [.verrechnung] }
+
+    /// Titel der Ansicht und des Knopfs
+    public var title: String {
+        isClaim ? "Erstattung verbuchen" : "Rückzahlung verrechnen"
+    }
+
+    public static func title(_ kind: Settlements.Manual.Kind) -> String {
+        switch kind {
+        case .zahlung: "Bar erhalten"
+        case .verrechnung: "Mit Einzahlung verrechnen"
+        }
+    }
+
+    /// Erklärung unter der Auswahl, je nach Art und Richtung
+    public var hint: String {
+        switch (kind, isClaim) {
+        case (.zahlung, _):
+            return "Für Geld, das du außerhalb der Konten bekommen hast, z. B. bar. Dein Budget ändert sich dadurch nicht."
+        case (.verrechnung, true):
+            return "Statt einer Erstattung zählt der Betrag als Einzahlung ins Gemeinsame, im Monat des Tags: 450 € überwiesen + 50 € verrechnet = 500 € Ist. Dein privates Budget rechnet das mit."
+        case (.verrechnung, false):
+            return "Ein Teil deiner Einzahlung zählt als Rückzahlung, im Monat des Tags: 500 € überwiesen − 50 € verrechnet = 450 € Ist. Dein privates Budget rechnet das mit."
+        }
+    }
+
+    private var isAmountEmpty: Bool { amountText.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    public var amountCents: Int? {
+        guard let cents = Money.parse(amountText), cents > 0 else { return nil }
+        return cents
+    }
+
+    /// Was noch fehlt oder nicht passt, in einem Satz; nil = bereit.
+    public var problem: String? {
+        if isAmountEmpty { return isClaim ? "Wie viel hast du erhalten?" : "Wie viel verrechnest du?" }
+        guard let cents = amountCents else { return "Den Betrag verstehe ich nicht, z. B. 20 oder 12,50." }
+        if cents > maxCents { return "Offen sind nur \(Money.format(maxCents, style: .exact))." }
+        if !kinds.contains(kind) { return "Eine Rückzahlung lässt sich nur mit der Einzahlung verrechnen." }
+        if note.count > 300 { return "Die Notiz ist zu lang (höchstens 300 Zeichen)." }
+        return nil
+    }
+
+    public var input: SettlementInput? {
+        guard problem == nil, let cents = amountCents else { return nil }
+        let text = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        return SettlementInput(amountCents: cents, kind: kind, settledOn: settledOn, note: text.isEmpty ? nil : text)
     }
 }
