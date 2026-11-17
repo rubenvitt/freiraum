@@ -1,22 +1,40 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import type { LlmCategorizer, LlmRequest, LlmSuggestion } from '../src/categorize/llm.js'
+import type {
+  LlmCategorizer,
+  LlmOption,
+  LlmRequest,
+  LlmSuggestion,
+  LlmTransaction,
+} from '../src/categorize/llm.js'
 import { OpenRouterCategorizer } from '../src/categorize/openrouter.js'
 import { bestRule, criteriaFromCorrection, matches, type Rule } from '../src/categorize/rules.js'
-import { LLM_MAX_FAILURES_IN_ROW, maskIbans } from '../src/categorize/service.js'
+import {
+  LLM_BATCH_SIZE,
+  LLM_CONCURRENCY,
+  LLM_MAX_FAILURES_IN_ROW,
+  maskIbans,
+} from '../src/categorize/service.js'
 import { setupTestApp } from './helpers/app.js'
 
 // Alle Namen, Beträge und IBANs sind erfunden.
 
-/** LLM-Ersatz: merkt sich die Anfragen und antwortet, was der Test vorgibt. */
+/**
+ * LLM-Ersatz: merkt sich die Anfragen und antwortet je Buchung, was der Test vorgibt
+ * (`llmAnswer`), oder für die ganze Anfrage (`llmBatch`). Wirft `llmAnswer`, scheitert die
+ * ganze Anfrage.
+ */
 const llmCalls: LlmRequest[] = []
-let llmAnswer: (req: LlmRequest) => LlmSuggestion | null | Promise<LlmSuggestion | null> = () =>
-  null
+let llmAnswer: (t: LlmTransaction, options: LlmOption[]) => LlmSuggestion | null = () => null
+let llmBatch: ((req: LlmRequest) => Promise<(LlmSuggestion | null)[]>) | null = null
 const fakeLlm: LlmCategorizer = {
   async suggest(req) {
     llmCalls.push(req)
-    return llmAnswer(req)
+    if (llmBatch) return llmBatch(req)
+    return req.transactions.map((t) => llmAnswer(t, req.options))
   },
 }
+const pick = (options: LlmOption[], label: string) =>
+  options.find((o) => o.label === label)?.potId ?? null
 
 const { db, categorize, ledger, request, reset, personWithSession } = setupTestApp({
   llm: fakeLlm,
@@ -24,9 +42,12 @@ const { db, categorize, ledger, request, reset, personWithSession } = setupTestA
 
 afterAll(() => db.end())
 beforeEach(async () => {
+  // Hintergrundläufe des vorigen Tests abwarten, bevor die Tabellen geleert werden.
+  await categorize.llmIdle()
   await reset()
   llmCalls.length = 0
   llmAnswer = () => null
+  llmBatch = null
 })
 
 type Json = Record<string, any>
@@ -417,9 +438,9 @@ describe('LLM-Vorschläge', () => {
     const b = await setup('Person B')
     const essen = await pot(a.token, a.householdId, 'Lebensmittel')
     await pot(b.token, b.householdId, 'Nur bei B')
-    llmAnswer = (req) => ({
+    llmAnswer = (_t, options) => ({
       kind: 'topf',
-      potId: req.options.find((o) => o.label === 'Lebensmittel')?.potId ?? null,
+      potId: pick(options, 'Lebensmittel'),
       confidencePct: 82,
       reason: 'Supermarkt, also vermutlich Lebensmittel.',
     })
@@ -427,6 +448,7 @@ describe('LLM-Vorschläge', () => {
     await importInto(a.token, a.accountId, [
       { ...grocery('2026-11-02'), counterpartyIban: 'DE02120300000000202051' },
     ])
+    await categorize.llmIdle()
     expect(llmCalls).toHaveLength(1)
     const [call] = llmCalls
     // Nur Töpfe des eigenen Haushalts, keine IBAN.
@@ -450,6 +472,140 @@ describe('LLM-Vorschläge', () => {
     })
   })
 
+  it('antwortet beim Import sofort und bündelt große Importe', async () => {
+    const a = await setup()
+    await pot(a.token, a.householdId, 'Lebensmittel')
+    // Das Modell hängt, bis der Test es freigibt.
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let inFlight = 0
+    let maxInFlight = 0
+    llmBatch = async (req) => {
+      inFlight++
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      await gate
+      inFlight--
+      return req.transactions.map(() => null)
+    }
+    const count = 1_000
+    const transactions = Array.from({ length: count }, (_, i) => ({
+      bookingDate: `2026-${String((i % 10) + 1).padStart(2, '0')}-${String((i % 28) + 1).padStart(2, '0')}`,
+      amountCents: -(100 + i),
+      counterpartyName: `Laden ${i}`,
+      purpose: `Einkauf Nr. ${i}`,
+    }))
+
+    const res = await importInto(a.token, a.accountId, transactions)
+    expect(res.status).toBe(201)
+    expect((await body(res)).imported).toBe(count)
+    // Der Import ist fertig, das Modell hat noch nicht geantwortet.
+    const unanswered = await db<{ n: number }[]>`
+      select count(*)::int as n from transactions where llm_checked_at is null
+    `
+    expect(unanswered[0]?.n).toBe(count)
+
+    release()
+    await categorize.llmIdle()
+    expect(llmCalls).toHaveLength(Math.ceil(count / LLM_BATCH_SIZE))
+    expect(llmCalls.every((c) => c.transactions.length <= LLM_BATCH_SIZE)).toBe(true)
+    expect(maxInFlight).toBeGreaterThan(1)
+    expect(maxInFlight).toBeLessThanOrEqual(LLM_CONCURRENCY)
+    const checked = await db<{ n: number }[]>`
+      select count(*)::int as n from transactions where llm_checked_at is not null
+    `
+    expect(checked[0]?.n).toBe(count)
+  })
+
+  it('ordnet die Antworten eines Stapels den richtigen Buchungen zu', async () => {
+    const a = await setup()
+    const essen = await pot(a.token, a.householdId, 'Lebensmittel')
+    llmAnswer = (t, options) =>
+      t.amountCents > 0
+        ? { kind: 'einnahme', potId: null, confidencePct: 95, reason: 'Gehalt.' }
+        : t.counterpartyName === 'Unklar'
+          ? null
+          : {
+              kind: 'topf',
+              potId: pick(options, 'Lebensmittel'),
+              confidencePct: 80,
+              reason: 'Laden.',
+            }
+    const res = await importInto(a.token, a.accountId, [
+      grocery('2026-11-02'),
+      {
+        bookingDate: '2026-11-01',
+        amountCents: 300_000,
+        counterpartyName: 'Arbeitgeberin Beispiel',
+        purpose: 'Gehalt',
+      },
+      { bookingDate: '2026-11-03', amountCents: -999, counterpartyName: 'Unklar' },
+    ])
+    expect(res.status).toBe(201)
+    await categorize.llmIdle()
+    expect(llmCalls).toHaveLength(1)
+    expect(llmCalls[0]?.transactions).toHaveLength(3)
+    const byName = new Map((await pending(a.token)).map((t) => [t.counterpartyName, t]))
+    expect(byName.get('Arbeitgeberin Beispiel')).toMatchObject({
+      status: 'vorgeschlagen',
+      splits: [{ kind: 'einnahme', potId: null, amountCents: 300_000 }],
+    })
+    expect(byName.get('Supermarkt Beispiel')).toMatchObject({
+      status: 'vorgeschlagen',
+      splits: [{ kind: 'topf', potId: essen }],
+    })
+    expect(byName.get('Unklar')).toMatchObject({ status: 'importiert', suggestion: null })
+  })
+
+  it('mischt beim Nachholen keine Haushalte in einer Anfrage', async () => {
+    const a = await setup('Person A')
+    const b = await setup('Person B')
+    await pot(a.token, a.householdId, 'Nur bei A')
+    await pot(b.token, b.householdId, 'Nur bei B')
+    llmAnswer = () => {
+      throw new Error('HTTP 503')
+    }
+    await importInto(a.token, a.accountId, [grocery('2026-11-02'), grocery('2026-11-03')])
+    await importInto(b.token, b.accountId, [grocery('2026-11-04')])
+    await categorize.llmIdle()
+    llmCalls.length = 0
+    llmAnswer = () => null
+
+    await categorize.retryLlmSuggestions()
+    expect(llmCalls).toHaveLength(2)
+    const labels = llmCalls.map((c) => c.options.map((o) => o.label))
+    expect(labels).toContainEqual(expect.arrayContaining(['Nur bei A']))
+    expect(labels).toContainEqual(expect.arrayContaining(['Nur bei B']))
+    for (const l of labels) {
+      expect(l.includes('Nur bei A') && l.includes('Nur bei B')).toBe(false)
+    }
+    const sizes = llmCalls.map((c) => c.transactions.length).sort()
+    expect(sizes).toEqual([1, 2])
+  })
+
+  it('holt nur Buchungen ab dem Budgetbeginn nach', async () => {
+    const a = await setup()
+    await db`update households set budget_start_month = '2026-11-01' where id = ${a.householdId}`
+    llmAnswer = () => {
+      throw new Error('HTTP 503')
+    }
+    // Ältere Buchungen zuerst importiert, also vorne beim Nachholen, wenn nichts filtert.
+    await importInto(
+      a.token,
+      a.accountId,
+      Array.from({ length: 5 }, (_, i) => grocery(`2026-10-${10 + i}`)),
+    )
+    await importInto(a.token, a.accountId, [grocery('2026-11-02')])
+    await categorize.llmIdle()
+    expect(llmCalls.map((c) => c.transactions.length)).toEqual([1])
+    llmCalls.length = 0
+    llmAnswer = () => null
+    // Die Oktober-Buchungen belegen keinen Platz im Durchgang.
+    await categorize.retryLlmSuggestions({ limit: 1 })
+    expect(llmCalls.map((c) => c.transactions.map((t) => t.bookingDate))).toEqual([['2026-11-02']])
+  })
+
   it('ignoriert ungültige Antworten und fragt nicht zweimal', async () => {
     const a = await setup()
     await pot(a.token, a.householdId, 'Lebensmittel')
@@ -460,11 +616,14 @@ describe('LLM-Vorschläge', () => {
       reason: 'Erfunden',
     })
     await importInto(a.token, a.accountId, [grocery('2026-11-02')])
+    await categorize.llmIdle()
     const [t] = await pending(a.token)
     expect(t).toMatchObject({ status: 'importiert', suggestion: null })
     expect(llmCalls).toHaveLength(1)
     // Gleicher Import erneut: nichts Neues, kein weiterer Aufruf.
     await importInto(a.token, a.accountId, [grocery('2026-11-02')])
+    await categorize.llmIdle()
+    expect(await categorize.retryLlmSuggestions()).toBe(0)
     expect(llmCalls).toHaveLength(1)
   })
 
@@ -478,7 +637,8 @@ describe('LLM-Vorschläge', () => {
         purpose: 'Miete November IBAN DE89 3704 0044 0532 0130 00 BIC COBADEFFXXX',
       },
     ])
-    expect(llmCalls[0]?.transaction.purpose).toBe('Miete November IBAN [IBAN] BIC COBADEFFXXX')
+    await categorize.llmIdle()
+    expect(llmCalls[0]?.transactions[0]?.purpose).toBe('Miete November IBAN [IBAN] BIC COBADEFFXXX')
   })
 
   it('holt Vorschläge nach, wenn das Modell nicht erreichbar war', async () => {
@@ -489,13 +649,14 @@ describe('LLM-Vorschläge', () => {
     }
     const res = await importInto(a.token, a.accountId, [grocery('2026-11-02')])
     expect(res.status).toBe(201)
+    await categorize.llmIdle()
     expect(llmCalls).toHaveLength(1)
     const [before] = await pending(a.token)
     expect(before).toMatchObject({ status: 'importiert', suggestion: null })
 
-    llmAnswer = (req) => ({
+    llmAnswer = (_t, options) => ({
       kind: 'topf',
-      potId: req.options.find((o) => o.label === 'Lebensmittel')?.potId ?? null,
+      potId: pick(options, 'Lebensmittel'),
       confidencePct: 70,
       reason: 'Supermarkt.',
     })
@@ -507,19 +668,29 @@ describe('LLM-Vorschläge', () => {
     expect(llmCalls).toHaveLength(2)
   })
 
-  it('bricht nach mehreren Fehlern in Folge ab, statt jede Buchung zu versuchen', async () => {
+  it('bricht nach mehreren Fehlern in Folge ab, statt jede Anfrage zu versuchen', async () => {
     const a = await setup()
     llmAnswer = () => {
       throw new Error('HTTP 503')
     }
+    const count = 10 * LLM_BATCH_SIZE
     const res = await importInto(
       a.token,
       a.accountId,
-      Array.from({ length: 10 }, (_, i) => grocery(`2026-11-${String(i + 1).padStart(2, '0')}`)),
+      Array.from({ length: count }, (_, i) => ({
+        ...grocery(`2026-11-${String((i % 28) + 1).padStart(2, '0')}`, -(100 + i)),
+      })),
     )
     expect(res.status).toBe(201)
-    expect((await body(res)).imported).toBe(10)
-    expect(llmCalls).toHaveLength(LLM_MAX_FAILURES_IN_ROW)
+    expect((await body(res)).imported).toBe(count)
+    await categorize.llmIdle()
+    // Laufende Anfragen dürfen noch zu Ende gehen, neue beginnen nicht mehr.
+    expect(llmCalls.length).toBeGreaterThanOrEqual(LLM_MAX_FAILURES_IN_ROW)
+    expect(llmCalls.length).toBeLessThanOrEqual(LLM_MAX_FAILURES_IN_ROW + LLM_CONCURRENCY - 1)
+    const unchecked = await db<{ n: number }[]>`
+      select count(*)::int as n from transactions where llm_checked_at is null
+    `
+    expect(unchecked[0]?.n).toBe(count)
   })
 
   it('funktioniert mit dem OpenRouter-Adapter von Anfang bis Ende', async () => {
@@ -539,18 +710,19 @@ describe('LLM-Vorschläge', () => {
           sent.push(String(init?.body))
           // o1 Einnahme, o2 Umbuchung, o3 Lebensmittel
           const content = JSON.stringify({
-            option: 'o3',
-            confidence_pct: 77,
-            reason: 'Einkauf im Supermarkt.',
+            antworten: [
+              { buchung: 'b1', option: 'o3', confidence_pct: 77, reason: 'Einkauf im Supermarkt.' },
+            ],
           })
           return Response.json({ choices: [{ message: { content } }] })
         },
       },
     )
-    llmAnswer = (req) => adapter.suggest(req)
+    llmBatch = (req) => adapter.suggest(req)
     await importInto(a.token, a.accountId, [
       { ...grocery('2026-11-02'), counterpartyIban: 'DE02120300000000202051' },
     ])
+    await categorize.llmIdle()
     expect(sent).toHaveLength(1)
     expect(sent[0]).not.toContain('DE02')
     expect(sent[0]).not.toContain(essen)
@@ -560,6 +732,8 @@ describe('LLM-Vorschläge', () => {
       splits: [{ kind: 'topf', potId: essen, amountCents: -4_250 }],
       suggestion: { source: 'llm', confidencePct: 77, reason: 'Einkauf im Supermarkt.' },
     })
+    // Keine Buchungs-ID verlässt den Server.
+    expect(sent[0]).not.toContain(t?.id)
   })
 
   it('überlässt Regeltreffer nicht dem LLM', async () => {
@@ -571,6 +745,7 @@ describe('LLM-Vorschläge', () => {
       a.token,
     )
     await importInto(a.token, a.accountId, [grocery('2026-11-02')])
+    await categorize.llmIdle()
     expect(llmCalls).toHaveLength(0)
     const [t] = await pending(a.token)
     expect(t?.suggestion.source).toBe('regel')

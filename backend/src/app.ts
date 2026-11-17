@@ -50,13 +50,14 @@ export function createApp(deps: { db: Db; config: Config; llm?: LlmCategorizer |
         : null
   const auth = new AuthService(deps.db, deps.config)
   // Für Buchungen, die neu ins Budget kommen (Import, früherer Budgetbeginn): Regeln in der
-  // Transaktion, LLM danach (Netzwerk, ohne offene Transaktion).
+  // Transaktion, LLM danach im Hintergrund (Netzwerk, ohne offene Transaktion; der Aufrufer
+  // wartet nicht darauf).
   const suggest: ImportHooks = {
     inTransaction: async (tx, ids, asOf) => {
       await categorize.applyRules(tx, ids, asOf)
     },
     afterCommit: async (ids, asOf) => {
-      await categorize.suggestWithLlm(ids, asOf)
+      categorize.queueLlmSuggestions(ids, asOf)
     },
   }
   const budget = new BudgetService(deps.db, suggest)

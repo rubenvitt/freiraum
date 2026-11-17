@@ -73,9 +73,9 @@ export interface RecurringSeries {
 
 /**
  * Was nach einem Import mit den neuen Buchungen geschieht (Kategorisierung, Erst-ich).
- * `inTransaction` läuft in der Import-Transaktion, `afterCommit` danach (z. B. LLM-Aufrufe,
- * die nicht in einer offenen Transaktion warten sollen). Gilt für jeden Import, auch den
- * zeitgesteuerten Abruf beim Anbieter.
+ * `inTransaction` läuft in der Import-Transaktion, `afterCommit` danach, bevor der Import
+ * antwortet. Langsames (etwa LLM-Aufrufe) stößt `afterCommit` nur an, statt darauf zu warten.
+ * Gilt für jeden Import, auch den zeitgesteuerten Abruf beim Anbieter.
  */
 export interface ImportHooks {
   inTransaction?(tx: TransactionSql, transactionIds: string[], asOf: IsoDate): Promise<void>

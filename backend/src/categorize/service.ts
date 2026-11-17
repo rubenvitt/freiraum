@@ -212,8 +212,14 @@ const KIND_LABEL: Record<SplitKind, string> = {
   ausgleich: 'Ausgleich',
 }
 
-/** Abbruch eines LLM-Laufs nach so vielen Fehlern (Netzwerk, Zeit) in Folge. */
+/** Abbruch eines LLM-Laufs nach so vielen fehlgeschlagenen Anfragen (Netzwerk, Zeit) in Folge. */
 export const LLM_MAX_FAILURES_IN_ROW = 3
+/** Buchungen je LLM-Anfrage. */
+export const LLM_BATCH_SIZE = 20
+/** Höchstens so viele LLM-Anfragen gleichzeitig. */
+export const LLM_CONCURRENCY = 3
+/** Buchungen je Nachholen (alle 15 Minuten). */
+export const LLM_RETRY_LIMIT = 1_000
 
 /**
  * IBANs aus Freitext entfernen, bevor er an das Modell geht. Verwendungszwecke enthalten oft
@@ -564,16 +570,86 @@ export class CategorizationService {
 
   // --- LLM ---------------------------------------------------------------------
 
+  /** Schwanz der Warteschlange: LLM-Läufe nacheinander, damit keine Buchung doppelt gefragt wird. */
+  private llmQueue: Promise<unknown> = Promise.resolve()
+
+  private exclusive<T>(run: () => Promise<T>): Promise<T> {
+    const next = this.llmQueue.then(run)
+    this.llmQueue = next.catch(() => {})
+    return next
+  }
+
   /**
-   * LLM-Vorschläge für Buchungen ohne Aufteilung holen, die noch nie gefragt wurden. Läuft
-   * außerhalb der Import-Transaktion (Netzwerk). Die Buchung bleibt unverändert („importiert“),
-   * wenn das Modell nichts Brauchbares liefert; sie wartet dann auf eine Person. Ist das Modell
-   * nicht erreichbar (Fehler, Zeitüberschreitung), bleibt sie ungefragt und kommt beim
-   * Nachholen wieder dran. Nach mehreren Fehlern in Folge bricht der Lauf ab, damit ein Ausfall
-   * große Importe nicht aufhält.
+   * LLM-Vorschläge im Hintergrund holen (nach dem Import): kehrt sofort zurück, der Lauf reiht
+   * sich hinter laufende ein. Fehler landen im Log; was ungefragt bleibt, holt
+   * `retryLlmSuggestions` nach.
    */
-  async suggestWithLlm(transactionIds: string[], asOf: IsoDate = todayUtc()): Promise<number> {
-    if (!this.llm || transactionIds.length === 0) return 0
+  queueLlmSuggestions(transactionIds: string[], asOf: IsoDate = todayUtc()): void {
+    if (!this.llm || transactionIds.length === 0) return
+    this.exclusive(() => this.runLlm(transactionIds, asOf)).catch((err) => {
+      console.error('LLM-Vorschläge fehlgeschlagen', err instanceof Error ? err.message : err)
+    })
+  }
+
+  /** Wartet, bis alle eingereihten LLM-Läufe fertig sind (Tests, Herunterfahren). */
+  async llmIdle(): Promise<void> {
+    let tail: Promise<unknown>
+    do {
+      tail = this.llmQueue
+      await tail
+    } while (tail !== this.llmQueue)
+  }
+
+  /** LLM-Vorschläge für diese Buchungen holen und darauf warten. */
+  suggestWithLlm(transactionIds: string[], asOf: IsoDate = todayUtc()): Promise<number> {
+    if (!this.llm || transactionIds.length === 0) return Promise.resolve(0)
+    return this.exclusive(() => this.runLlm(transactionIds, asOf))
+  }
+
+  /**
+   * Buchungen nachholen, die noch nicht gefragt werden konnten (Modell nicht erreichbar, Server
+   * neu gestartet). Nur jüngst importierte, damit das Einschalten des LLM nicht die ganze
+   * Historie abfragt.
+   */
+  retryLlmSuggestions(
+    options: { limit?: number; withinDays?: number } = {},
+    asOf: IsoDate = todayUtc(),
+  ): Promise<number> {
+    if (!this.llm) return Promise.resolve(0)
+    return this.exclusive(async () => {
+      // Buchungen vor dem Budgetbeginn fragt runLlm nicht; hier gar nicht erst auswählen,
+      // sonst belegen sie dauerhaft die Plätze eines Durchgangs.
+      const rows = await this.db<{ id: string }[]>`
+        select t.id from transactions t
+        join accounts a on a.id = t.account_id
+        join households h on h.id = a.household_id
+        where t.status = 'importiert' and t.llm_checked_at is null
+          and t.booking_date >= h.budget_start_month
+          and t.created_at > now() - make_interval(days => ${options.withinDays ?? 7})
+        order by t.created_at, t.id
+        limit ${options.limit ?? LLM_RETRY_LIMIT}
+      `
+      return this.runLlm(
+        rows.map((r) => r.id),
+        asOf,
+      )
+    })
+  }
+
+  /**
+   * Ein LLM-Lauf für Buchungen ohne Aufteilung, die noch nie gefragt wurden. Läuft außerhalb
+   * jeder Import-Transaktion (Netzwerk). Die Buchungen gehen gebündelt hinaus (`LLM_BATCH_SIZE`
+   * je Anfrage, nur Buchungen eines Haushalts zusammen, höchstens `LLM_CONCURRENCY` Anfragen
+   * gleichzeitig).
+   *
+   * Eine Buchung bleibt unverändert („importiert“), wenn das Modell nichts Brauchbares liefert;
+   * sie wartet dann auf eine Person. Scheitert eine Anfrage (Fehler, Zeitüberschreitung), bleiben
+   * ihre Buchungen ungefragt und kommen beim Nachholen wieder dran. Nach mehreren gescheiterten
+   * Anfragen in Folge bricht der Lauf ab, damit ein Ausfall nicht jede Anfrage abwartet.
+   */
+  private async runLlm(transactionIds: string[], asOf: IsoDate): Promise<number> {
+    const llm = this.llm
+    if (!llm || transactionIds.length === 0) return 0
     const pending = await this.db<TxRow[]>`
       select t.id, t.account_id, a.household_id, h.kind as household_kind, h.owner_person_id,
              t.booking_date::text, t.amount_cents, t.counterparty_name, t.counterparty_iban,
@@ -584,53 +660,101 @@ export class CategorizationService {
       where t.id = any(${transactionIds}::uuid[])
         and t.status = 'importiert' and t.llm_checked_at is null
         and t.booking_date >= h.budget_start_month
-      order by t.booking_date, t.id
+      order by a.household_id, t.booking_date, t.id
     `
+    // Stapel je Haushalt: Optionen (Töpfe) gelten nur für diesen Haushalt.
+    const batches: { householdId: string; rows: TxRow[] }[] = []
+    for (const t of pending) {
+      const last = batches.at(-1)
+      if (last && last.householdId === t.household_id && last.rows.length < LLM_BATCH_SIZE) {
+        last.rows.push(t)
+      } else {
+        batches.push({ householdId: t.household_id, rows: [t] })
+      }
+    }
+
+    const optionsByHousehold = new Map<string, Promise<LlmOption[]>>()
+    const optionsFor = (householdId: string) => {
+      let options = optionsByHousehold.get(householdId)
+      if (!options) {
+        options = this.llmOptions(householdId)
+        optionsByHousehold.set(householdId, options)
+      }
+      return options
+    }
+
     let suggested = 0
     let failuresInRow = 0
-    const optionsByHousehold = new Map<string, LlmOption[]>()
-    for (const [index, t] of pending.entries()) {
-      if (failuresInRow >= LLM_MAX_FAILURES_IN_ROW) {
-        console.error(`LLM nicht erreichbar, ${pending.length - index} Buchungen später nachholen`)
-        break
-      }
-      let options = optionsByHousehold.get(t.household_id)
-      if (!options) {
-        options = await this.llmOptions(t.household_id)
-        optionsByHousehold.set(t.household_id, options)
-      }
-      let result: LlmSuggestion | null = null
-      try {
-        result = await this.llm.suggest({
-          transaction: {
-            bookingDate: t.booking_date,
-            amountCents: cents(t.amount_cents),
-            counterpartyName: maskIbans(t.counterparty_name),
-            purpose: maskIbans(t.purpose),
-          },
+    let unanswered = 0
+    let next = 0
+    const worker = async () => {
+      while (next < batches.length && failuresInRow < LLM_MAX_FAILURES_IN_ROW) {
+        const batch = batches[next++]
+        if (!batch) break
+        const options = await optionsFor(batch.householdId)
+        let results: (LlmSuggestion | null)[]
+        try {
+          results = await llm.suggest({
+            transactions: batch.rows.map((t) => ({
+              bookingDate: t.booking_date,
+              amountCents: cents(t.amount_cents),
+              counterpartyName: maskIbans(t.counterparty_name),
+              purpose: maskIbans(t.purpose),
+            })),
+            options,
+          })
+          failuresInRow = 0
+        } catch (err) {
+          console.error('LLM-Vorschlag fehlgeschlagen', err instanceof Error ? err.message : err)
+          failuresInRow++
+          unanswered += batch.rows.length
+          continue
+        }
+        suggested += await this.saveLlmResults(
+          batch.householdId,
+          batch.rows,
+          results,
           options,
-        })
-        failuresInRow = 0
-      } catch (err) {
-        console.error('LLM-Vorschlag fehlgeschlagen', err instanceof Error ? err.message : err)
-        failuresInRow++
-        continue
+          asOf,
+        )
       }
-      const valid =
-        result !== null &&
-        options.some((o) => o.kind === result.kind && o.potId === result.potId) &&
-        Number.isInteger(result.confidencePct) &&
-        result.confidencePct >= 0 &&
-        result.confidencePct <= 100 &&
-        result.reason.trim().length > 0
-      await this.db.begin(async (tx) => {
-        const [row] = await tx<{ status: string }[]>`
-          select t.status from transactions t join accounts a on a.id = t.account_id
-          where t.id = ${t.id}
-          for update of a, t
-        `
-        await tx`update transactions set llm_checked_at = now() where id = ${t.id}`
-        if (!valid || !result || row?.status !== 'importiert') return
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(LLM_CONCURRENCY, batches.length) }, () => worker()),
+    )
+    for (const batch of batches.slice(next)) unanswered += batch.rows.length
+    if (unanswered > 0) console.error(`LLM: ${unanswered} Buchungen später nachholen`)
+    return suggested
+  }
+
+  /** Antworten eines Stapels speichern; alle Buchungen des Stapels gelten danach als gefragt. */
+  private async saveLlmResults(
+    householdId: string,
+    rows: TxRow[],
+    results: (LlmSuggestion | null)[],
+    options: LlmOption[],
+    asOf: IsoDate,
+  ): Promise<number> {
+    const isValid = (r: LlmSuggestion | null | undefined): r is LlmSuggestion =>
+      r != null &&
+      options.some((o) => o.kind === r.kind && o.potId === r.potId) &&
+      Number.isInteger(r.confidencePct) &&
+      r.confidencePct >= 0 &&
+      r.confidencePct <= 100 &&
+      r.reason.trim().length > 0
+    return this.db.begin(async (tx) => {
+      // Reihenfolge wie bei Korrekturen: erst alle Konten des Haushalts, dann die Buchungen.
+      await this.lockHouseholdAccounts(tx, householdId)
+      const ids = rows.map((t) => t.id)
+      const current = await tx<{ id: string; status: string }[]>`
+        select id, status from transactions where id = any(${ids}::uuid[]) order by id for update
+      `
+      await tx`update transactions set llm_checked_at = now() where id = any(${ids}::uuid[])`
+      const stillOpen = new Set(current.filter((c) => c.status === 'importiert').map((c) => c.id))
+      const touched: TxRow[] = []
+      for (const [index, t] of rows.entries()) {
+        const result = results[index]
+        if (!isValid(result) || !stillOpen.has(t.id)) continue
         await this.replaceSplits(tx, t.id, [
           {
             kind: result.kind,
@@ -650,37 +774,15 @@ export class CategorizationService {
             person_id = null, rule_id = null, created_at = now()
         `
         await tx`update transactions set status = 'vorgeschlagen' where id = ${t.id}`
-        await this.refreshErstIch(
-          tx,
-          [{ householdId: t.household_id, bookingDate: t.booking_date }],
-          asOf,
-        )
-        suggested++
-      })
-    }
-    return suggested
-  }
-
-  /**
-   * Buchungen nachholen, die beim Import nicht gefragt werden konnten (Modell nicht erreichbar).
-   * Nur jüngst importierte, damit das Einschalten des LLM nicht die ganze Historie abfragt.
-   */
-  async retryLlmSuggestions(
-    options: { limit?: number; withinDays?: number } = {},
-    asOf: IsoDate = todayUtc(),
-  ): Promise<number> {
-    if (!this.llm) return 0
-    const rows = await this.db<{ id: string }[]>`
-      select id from transactions
-      where status = 'importiert' and llm_checked_at is null
-        and created_at > now() - make_interval(days => ${options.withinDays ?? 7})
-      order by created_at, id
-      limit ${options.limit ?? 200}
-    `
-    return this.suggestWithLlm(
-      rows.map((r) => r.id),
-      asOf,
-    )
+        touched.push(t)
+      }
+      await this.refreshErstIch(
+        tx,
+        touched.map((t) => ({ householdId: t.household_id, bookingDate: t.booking_date })),
+        asOf,
+      )
+      return touched.length
+    })
   }
 
   private async llmOptions(householdId: string): Promise<LlmOption[]> {
