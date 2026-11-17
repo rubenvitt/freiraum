@@ -145,6 +145,8 @@ private func ruleJSON(_ person: String, from: String, kind: String, amount: Int?
         #expect(rule("a", november, fest: 0).text == "Pause")
         #expect(rule("a", november, prozent: 4_000).text == "40\u{00A0}% vom Netto")
         #expect(rule("a", november, prozent: 1_250).text == "12,5\u{00A0}% vom Netto")
+        #expect(Percent.format(25) == "0,25\u{00A0}%")
+        #expect(Percent.format(10) == "0,1\u{00A0}%")
     }
 
     @Test func eigeneZeileObenUndSollDerAnderenVerborgen() {
@@ -219,7 +221,7 @@ private func ruleJSON(_ person: String, from: String, kind: String, amount: Int?
         #expect(mine.map(\.since) == ["ab Januar 2027", "ab Oktober 2026", "ab Juni 2026"])
         #expect(mine.map(\.active) == [false, true, false])
         #expect(mine.map(\.upcoming) == [true, false, false])
-        #expect(mine.allSatisfy(\.deletable))
+        #expect(mine.map(\.deletable) == [true, true, true])
         #expect(history.people[1].entries.map(\.deletable) == [false])
         #expect(ContributionRule.active(in: rules, personId: "a", month: januar)?.percentBp == 3_500)
         #expect(ContributionRule.active(in: rules, personId: "a", month: YearMonth(year: 2026, month: 5)) == nil)

@@ -152,9 +152,12 @@ public enum Percent {
         number(bp) + "\u{00A0}%"
     }
 
-    /// 4000 → „40“, 1250 → „12,5“ (für Eingabefelder)
+    /// 4000 → „40“, 1250 → „12,5“, 25 → „0,25“ (auch für Eingabefelder)
     public static func number(_ bp: Int) -> String {
-        Money.number(bp, style: .compact)
+        var text = Money.number(bp, style: .compact)
+        // Money schreibt zwei Nachkommastellen („12,50“); bei Prozent reicht eine.
+        if text.contains(","), text.hasSuffix("0") { text.removeLast() }
+        return text
     }
 
     /// „40“, „12,5“, „0,25 %“ → Basispunkte; nil bei leer, ungültig oder außerhalb 0,01–100 %.
