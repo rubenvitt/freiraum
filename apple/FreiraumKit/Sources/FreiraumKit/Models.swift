@@ -148,15 +148,20 @@ public struct BudgetMonth: Hashable, Sendable, Codable {
     }
 }
 
-/// Ziel einer Aufteilung: ein Topf, „Einnahme“ (fließt in „Noch ohne Aufgabe“) oder
-/// „Umbuchung“ (zwischen eigenen Konten, ohne Wirkung aufs Budget), mit oder ohne Gegenkonto.
-/// Eine Abhebung mit dem Bargeldkonto als Gegenkonto zählt im Bargeldbestand.
+/// Ziel einer Aufteilung: ein Topf, „Einnahme“ (fließt in „Noch ohne Aufgabe“), „Umbuchung“
+/// (zwischen eigenen Konten, ohne Wirkung aufs Budget, mit oder ohne Gegenkonto), Einzahlung ins
+/// Gemeinsame oder Ausgleich zwischen privatem und gemeinsamem Konto. Eine Abhebung mit dem
+/// Bargeldkonto als Gegenkonto zählt im Bargeldbestand. Bei Einzahlung und Ausgleich nennt
+/// `personId` auf gemeinsamen Konten, von wem bzw. an wen das Geld geht; auf privaten Konten ist
+/// sie leer.
 public enum SplitTarget: Hashable, Sendable, Codable {
     case pot(String)
     case income
     case transfer
     /// Umbuchung auf ein eigenes Konto desselben Haushalts (Konto-ID), z. B. ins Bargeld
     case transferTo(String)
+    case contribution(personId: String?)
+    case settlement(personId: String?)
 }
 
 public struct Split: Hashable, Sendable, Codable {

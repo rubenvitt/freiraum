@@ -158,8 +158,9 @@ private let november = YearMonth(year: 2026, month: 11)
         #expect(card.isWithdrawal)
         #expect(!card.offersCash)
         #expect(card.note == "Zählt als Bargeld, bis du Ausgaben mit dem Plus erfasst.")
-        #expect(ConfirmCard.label(.transferTo("a1"), pots: [], accounts: [giro]) == "Umbuchung → Giro")
-        #expect(ConfirmCard.label(.transferTo("x"), pots: []) == "Umbuchung")
+        let context = TargetContext(household: ich, pots: [], accounts: [giro])
+        #expect(context.label(.transferTo("a1"), amountCents: -5_000) == "Umbuchung → Giro")
+        #expect(context.label(.transferTo("x"), amountCents: -5_000) == "Umbuchung")
 
         // Ausgänge bieten „Ins Bargeld“ an, Eingänge nicht.
         let out = TargetOption.options(pots: pots, forIncome: false, cashAccounts: [cash, giro])

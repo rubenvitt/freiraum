@@ -71,12 +71,14 @@ extension BudgetMonth {
 }
 
 extension SplitTarget {
-    init(kind: String, potId: String?, counterAccountId: String? = nil) throws {
+    init(kind: String, potId: String?, personId: String?, counterAccountId: String? = nil) throws {
         switch (kind, potId, counterAccountId) {
         case ("topf", let id?, _): self = .pot(id)
         case ("einnahme", _, _): self = .income
         case ("umbuchung", _, let account?): self = .transferTo(account)
         case ("umbuchung", _, nil): self = .transfer
+        case ("einzahlung", _, _): self = .contribution(personId: personId)
+        case ("ausgleich", _, _): self = .settlement(personId: personId)
         default: throw MappingError(description: "Aufteilung \(kind)")
         }
     }
@@ -86,6 +88,8 @@ extension SplitTarget {
         case .pot: .topf
         case .income: .einnahme
         case .transfer, .transferTo: .umbuchung
+        case .contribution: .einzahlung
+        case .settlement: .ausgleich
         }
     }
 
@@ -98,12 +102,20 @@ extension SplitTarget {
         if case let .transferTo(id) = self { return id }
         return nil
     }
+
+    var personId: String? {
+        switch self {
+        case let .contribution(id), let .settlement(id): id
+        case .pot, .income, .transfer, .transferTo: nil
+        }
+    }
 }
 
 extension Split {
+    /// Eingabe für `PUT /v1/transactions/{id}/splits`.
     var api: Components.Schemas.SplitInput {
         .init(
-            kind: target.apiKind, potId: target.potId, personId: nil,
+            kind: target.apiKind, potId: target.potId, personId: target.personId,
             counterAccountId: target.counterAccountId, amountCents: amountCents
         )
     }
@@ -117,7 +129,9 @@ extension Transaction {
             counterpartyName: t.counterpartyName, purpose: t.purpose, status: status,
             splits: try t.splits.map {
                 Split(
-                    target: try SplitTarget(kind: $0.kind.rawValue, potId: $0.potId, counterAccountId: $0.counterAccountId),
+                    target: try SplitTarget(
+                        kind: $0.kind.rawValue, potId: $0.potId, personId: $0.personId, counterAccountId: $0.counterAccountId
+                    ),
                     amountCents: $0.amountCents
                 )
             },
@@ -125,8 +139,43 @@ extension Transaction {
                 guard let source = Suggestion.Source(rawValue: s.source.rawValue) else { throw MappingError(description: "Quelle \(s.source.rawValue)") }
                 return Suggestion(
                     source: source,
-                    target: try SplitTarget(kind: s.kind.rawValue, potId: s.potId, counterAccountId: s.counterAccountId),
+                    target: try SplitTarget(
+                        kind: s.kind.rawValue, potId: s.potId, personId: s.personId, counterAccountId: s.counterAccountId
+                    ),
                     confidencePct: s.confidencePct, reason: s.reason
+                )
+            }
+        )
+    }
+}
+
+extension Settlements {
+    init(_ s: Components.Schemas.Settlements) throws {
+        self.init(
+            householdId: s.householdId,
+            balances: s.balances.map {
+                Balance(
+                    personId: $0.personId, displayName: $0.displayName, claimedCents: $0.claimedCents,
+                    repaidCents: $0.repaidCents, debtCents: $0.debtCents, paidBackCents: $0.paidBackCents,
+                    openCents: $0.openCents
+                )
+            },
+            openItems: s.openItems.map {
+                Item(
+                    transactionId: $0.transactionId, personId: $0.personId, bookingDate: $0.bookingDate,
+                    counterpartyName: $0.counterpartyName, amountCents: $0.amountCents, openCents: $0.openCents
+                )
+            },
+            openDebts: s.openDebts.map {
+                Item(
+                    transactionId: $0.transactionId, personId: $0.personId, bookingDate: $0.bookingDate,
+                    counterpartyName: $0.counterpartyName, amountCents: $0.amountCents, openCents: $0.openCents
+                )
+            },
+            manual: try s.manual.map {
+                Manual(
+                    id: $0.id, personId: $0.personId, kind: try apiEnum($0.kind.rawValue), amountCents: $0.amountCents,
+                    settledOn: $0.settledOn, note: $0.note
                 )
             }
         )

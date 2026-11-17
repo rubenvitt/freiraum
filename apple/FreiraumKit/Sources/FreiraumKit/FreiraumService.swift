@@ -257,6 +257,17 @@ public final class FreiraumService: Sendable {
         }
     }
 
+    // MARK: - Paar
+
+    /// Ausgleich im gemeinsamen Haushalt: Saldo je Person, offene Forderungen und Schulden.
+    public func settlements(householdId: String) async throws(APIError) -> Settlements {
+        try await call {
+            let out = try await client.getV1HouseholdsHouseholdIdSettlements(path: .init(householdId: householdId))
+            guard case let .ok(ok) = out else { throw unexpected(out) }
+            return try Settlements(try ok.body.json)
+        }
+    }
+
     // MARK: - Einzahlungen ins Gemeinsame
 
     /// Einzahlungsregeln beider Personen im gemeinsamen Haushalt, mit Historie.

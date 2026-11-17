@@ -8,6 +8,7 @@ struct OverviewView: View {
     @State private var showDistribute = false
     @State private var showSettings = false
     @State private var showCash = false
+    @State private var showSettlement = false
     @State private var contributionsOf: Household?
 
     var body: some View {
@@ -47,6 +48,7 @@ struct OverviewView: View {
         .sheet(isPresented: $showDistribute) { DistributeView() }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showCash) { CashExpenseView() }
+        .sheet(isPresented: $showSettlement) { SettlementView() }
         .sheet(item: $contributionsOf) { household in ContributionsView(household: household) }
     }
 
@@ -87,6 +89,14 @@ struct OverviewView: View {
             }
             .buttonStyle(.plain)
             .accessibilityHint("Öffnet „Barausgabe erfassen“")
+        }
+
+        if let household = model.selectedHousehold, let settlement = model.settlementState(for: household) {
+            Button { showSettlement = true } label: {
+                SettlementCard(state: settlement)
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Öffnet den Ausgleich")
         }
 
         if let household = model.selectedHousehold, let contributions = model.contributionsState(for: household) {

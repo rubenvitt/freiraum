@@ -74,10 +74,8 @@ struct ConfirmView: View {
     }
 
     private func info(for t: Transaction) -> ConfirmCard {
-        let household = model.household(of: t)
-        return ConfirmCard(
-            transaction: t, account: model.account(t.accountId), household: household,
-            pots: model.pots(of: household?.id), accounts: model.accounts(of: household?.id), today: today
+        ConfirmCard(
+            transaction: t, account: model.account(t.accountId), context: model.targetContext(for: t), today: today
         )
     }
 
@@ -303,7 +301,8 @@ struct ProgressDots: View {
     }
 }
 
-/// Ziel für eine Buchung wählen (ganzer Betrag).
+/// Ziel für eine Buchung wählen (ganzer Betrag). Beim gemeinsamen Konto stehen auch die eigenen
+/// privaten Töpfe zur Wahl („Privat (ich zahle zurück)“), beim privaten die gemeinsamen.
 struct TargetPicker: View {
     let transaction: Transaction
     let choose: (SplitTarget) -> Void
@@ -312,13 +311,7 @@ struct TargetPicker: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        let household = model.household(of: transaction)
-        let options = TargetOption.options(
-            pots: model.pots(of: household?.id), forIncome: transaction.amountCents > 0,
-            cashAccounts: model.accounts(of: household?.id)
-        )
-        let groups = Dictionary(grouping: options, by: \.group)
-        let order = options.reduce(into: [String]()) { if !$0.contains($1.group) { $0.append($1.group) } }
+        let groups = model.targetContext(for: transaction).groups(amountCents: transaction.amountCents)
         NavigationStack {
             List {
                 Section {
@@ -326,9 +319,9 @@ struct TargetPicker: View {
                         .font(.footnote)
                         .foregroundStyle(Theme.secondary)
                 }
-                ForEach(order, id: \.self) { group in
-                    Section(group) {
-                        ForEach(groups[group] ?? []) { option in
+                ForEach(groups) { group in
+                    Section {
+                        ForEach(group.options) { option in
                             Button {
                                 choose(option.target)
                                 dismiss()
@@ -341,6 +334,12 @@ struct TargetPicker: View {
                                     }
                                 }
                             }
+                        }
+                    } header: {
+                        Text(group.title)
+                    } footer: {
+                        if let footer = group.footer {
+                            Text(footer)
                         }
                     }
                 }
@@ -371,11 +370,8 @@ struct SplitSheet: View {
     }
 
     var body: some View {
-        let household = model.household(of: transaction)
-        let options = TargetOption.options(
-            pots: model.pots(of: household?.id), forIncome: transaction.amountCents > 0,
-            cashAccounts: model.accounts(of: household?.id)
-        )
+        let context = model.targetContext(for: transaction)
+        let options = context.options(amountCents: transaction.amountCents)
         NavigationStack {
             Form {
                 Section {
@@ -388,7 +384,9 @@ struct SplitSheet: View {
                         Picker("Ziel", selection: $row.target) {
                             Text("Bitte wählen").tag(SplitTarget?.none)
                             ForEach(options) { option in
-                                Text(option.label).tag(Optional(option.target))
+                                // „Freizeit (privat)“: in der flachen Liste ohne Gruppen eindeutig
+                                Text(context.label(option.target, amountCents: transaction.amountCents))
+                                    .tag(Optional(option.target))
                             }
                         }
                         TextField("Betrag", text: $row.amountText)
