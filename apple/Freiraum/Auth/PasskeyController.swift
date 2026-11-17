@@ -80,8 +80,14 @@ extension PasskeyController: ASAuthorizationControllerDelegate {
     nonisolated func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: any Error) {
         let canceled = (error as? ASAuthorizationError)?.code == .canceled
         let message = Self.message(for: error)
+        let failure: any Error
+        if canceled {
+            failure = CancellationError()
+        } else {
+            failure = PasskeyFailure(message: message)
+        }
         MainActor.assumeIsolated {
-            finish(.failure(canceled ? CancellationError() : PasskeyFailure(message: message)))
+            finish(.failure(failure))
         }
     }
 

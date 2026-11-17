@@ -196,10 +196,10 @@ struct ConfirmView: View {
                 .frame(width: 88, height: 88)
                 .background(Theme.accent.opacity(0.14), in: .circle)
                 .accessibilityHidden(true)
-            Text(skipped.isEmpty ? "Alles zugeordnet" : "Für jetzt erledigt")
+            Text(verbatim: skipped.isEmpty ? "Alles zugeordnet" : "Für jetzt erledigt")
                 .font(.title.weight(.bold))
                 .foregroundStyle(Theme.text)
-            Text(skipped.isEmpty
+            Text(verbatim: skipped.isEmpty
                 ? "Dein Budget ist aktuell. Barausgaben erfasst du mit dem Plus."
                 : "\(skipped.count) Buchung\(skipped.count == 1 ? "" : "en") für später aufgehoben.")
                 .font(.body)
@@ -239,7 +239,11 @@ struct ProgressDots: View {
             }
         }
         .accessibilityElement()
-        .accessibilityLabel(total == 0 ? "Keine Buchungen" : "\(min(done + 1, total)) von \(total)")
+        .accessibilityLabel(Text(label))
+    }
+
+    private var label: String {
+        total == 0 ? "Keine Buchungen" : "\(min(done + 1, total)) von \(total)"
     }
 }
 

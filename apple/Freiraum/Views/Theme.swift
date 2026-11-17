@@ -1,6 +1,9 @@
 import FreiraumKit
 import SwiftUI
 
+/// Buchung aus FreiraumKit; überdeckt `SwiftUI.Transaction` in der ganzen App.
+typealias Transaction = FreiraumKit.Transaction
+
 /// Farben aus dem Design-Entwurf. Farbe nur mit Bedeutung: Minze = gut/Aktion,
 /// Orange = knapp/überzogen/Hinweis, Blau = gemeinsam, Violett = privat.
 enum Theme {
