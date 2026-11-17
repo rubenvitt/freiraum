@@ -7,6 +7,7 @@ struct OverviewView: View {
     @State private var showConfirm = false
     @State private var showDistribute = false
     @State private var showSettings = false
+    @State private var contributionsOf: Household?
 
     var body: some View {
         NavigationStack {
@@ -44,6 +45,7 @@ struct OverviewView: View {
         .sheet(isPresented: $showConfirm) { ConfirmView() }
         .sheet(isPresented: $showDistribute) { DistributeView() }
         .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(item: $contributionsOf) { household in ContributionsView(household: household) }
     }
 
     private var header: some View {
@@ -72,6 +74,10 @@ struct OverviewView: View {
             }
             .buttonStyle(.plain)
             .accessibilityHint("Öffnet „Buchungen bestätigen“")
+        }
+
+        if let household = model.selectedHousehold, let contributions = model.contributionsState(for: household) {
+            ContributionsCard(state: contributions) { contributionsOf = household }
         }
 
         if !state.erstIch.isEmpty {

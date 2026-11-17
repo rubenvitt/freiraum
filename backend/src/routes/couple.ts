@@ -73,19 +73,19 @@ const MetricsSchema = z
     ruecklagen: PotProgressSchema.nullable(),
     sparquote: SavingsRateSchema.nullable(),
   })
-  .openapi('Metrics')
+  .openapi('PersonMetrics')
 
-const ContributionRuleSchema = z
-  .object({
-    householdId: z.uuid(),
-    personId: z.uuid(),
-    validFrom: Month,
-    kind: z.enum(['fest', 'prozent']),
-    amountCents: z.number().int().nullable(),
-    percentBp: z.number().int().nullable(),
-    updatedAt: z.iso.datetime(),
-  })
-  .openapi('ContributionRule')
+const ContributionRuleFields = z.object({
+  householdId: z.uuid(),
+  personId: z.uuid(),
+  validFrom: Month,
+  kind: z.enum(['fest', 'prozent']),
+  amountCents: z.number().int().nullable(),
+  percentBp: z.number().int().nullable(),
+  updatedAt: z.iso.datetime(),
+})
+
+const ContributionRuleSchema = ContributionRuleFields.openapi('ContributionRule')
 
 const ContributionsSchema = z
   .object({
@@ -95,7 +95,9 @@ const ContributionsSchema = z
       z.object({
         personId: z.uuid(),
         displayName: z.string(),
-        rule: ContributionRuleSchema.nullable().openapi({ description: 'gültige Regel im Monat' }),
+        // Inline statt Verweis: Aus Verweis + nullable wird allOf, und das liest der generierte
+        // Swift-Client nicht als optional (FREI-26).
+        rule: ContributionRuleFields.nullable().openapi({ description: 'gültige Regel im Monat' }),
         targetCents: z.number().int().nullable().openapi({ description: 'Soll' }),
         targetVisible: z.boolean().openapi({
           description:
@@ -120,10 +122,22 @@ const SettlementsSchema = z
           .int()
           .openapi({ description: 'privat bezahlte gemeinsame Ausgaben' }),
         repaidCents: z.number().int().openapi({ description: 'erstattet (Überweisung, von Hand)' }),
+        debtCents: z
+          .number()
+          .int()
+          .openapi({ description: 'vom gemeinsamen Konto bezahlte private Ausgaben' }),
+        paidBackCents: z
+          .number()
+          .int()
+          .openapi({ description: 'zurückgezahlt (Überweisung aufs gemeinsame Konto)' }),
         openCents: z
           .number()
           .int()
-          .openapi({ description: 'schuldet das Gemeinsame der Person noch; negativ = zu viel' }),
+          .openapi({
+            description:
+              'Saldo: positiv = schuldet das Gemeinsame der Person, negativ = schuldet die Person ' +
+              'dem Gemeinsamen',
+          }),
       }),
     ),
     openItems: z.array(
@@ -136,6 +150,22 @@ const SettlementsSchema = z
         openCents: z.number().int(),
       }),
     ),
+    openDebts: z
+      .array(
+        z.object({
+          transactionId: z.uuid(),
+          personId: z.uuid(),
+          bookingDate: IsoDate,
+          counterpartyName: z.string().nullable(),
+          amountCents: z.number().int().openapi({ description: 'privater Anteil der Buchung' }),
+          openCents: z.number().int(),
+        }),
+      )
+      .openapi({
+        description:
+          'Buchungen des gemeinsamen Kontos in privaten Töpfen, die noch nicht zurückgezahlt ' +
+          'oder mit Forderungen verrechnet sind (ohne den Topf selbst)',
+      }),
     manual: z.array(
       z.object({
         id: z.uuid(),
@@ -323,11 +353,14 @@ const getSettlements = createRoute({
   method: 'get',
   path: '/v1/households/{householdId}/settlements',
   tags: ['Paar'],
-  summary: 'Ausgleich: was das Gemeinsame jeder Person für privat bezahlte Ausgaben schuldet',
+  summary: 'Ausgleich: was das Gemeinsame und die Personen einander schulden',
   description:
-    'Entsteht, wenn eine Buchung eines privaten Kontos einem Topf des gemeinsamen Haushalts ' +
-    'zugeordnet wird. Erledigt wird er durch eine Überweisung vom gemeinsamen Konto (Art ' +
-    'ausgleich) oder von Hand. Erstattungen decken die Ausgaben der Reihe nach, älteste zuerst.',
+    'Eine Forderung entsteht, wenn eine Buchung eines privaten Kontos einem Topf des ' +
+    'gemeinsamen Haushalts zugeordnet wird. Erledigt wird sie durch eine Überweisung vom ' +
+    'gemeinsamen Konto (Art ausgleich) oder von Hand. Eine Schuld entsteht umgekehrt, wenn eine ' +
+    'Buchung des gemeinsamen Kontos dem privaten Topf einer Person zugeordnet wird; sie zahlt ' +
+    'sie per Überweisung aufs gemeinsame Konto (Art ausgleich) zurück. Forderung und Schuld ' +
+    'verrechnen sich; Erstattungen decken der Reihe nach, älteste zuerst.',
   security,
   middleware: [requireAuth] as const,
   request: { params: z.object({ householdId: pathId('householdId') }) },

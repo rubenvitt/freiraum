@@ -1140,7 +1140,7 @@ components:
               description: privater Haushalt der freigebenden Person
           required:
             - householdId
-    Metrics:
+    PersonMetrics:
       type: object
       properties:
         personId:
@@ -1266,12 +1266,45 @@ components:
               displayName:
                 type: string
               rule:
-                allOf:
-                  - $ref: "#/components/schemas/ContributionRule"
-                  - type:
-                      - object
+                type:
+                  - object
+                  - "null"
+                properties:
+                  householdId:
+                    type: string
+                    format: uuid
+                  personId:
+                    type: string
+                    format: uuid
+                  validFrom:
+                    type: string
+                    pattern: ^\d{4}-(0[1-9]|1[0-2])$
+                    example: 2026-11
+                  kind:
+                    type: string
+                    enum:
+                      - fest
+                      - prozent
+                  amountCents:
+                    type:
+                      - integer
                       - "null"
-                    description: gültige Regel im Monat
+                  percentBp:
+                    type:
+                      - integer
+                      - "null"
+                  updatedAt:
+                    type: string
+                    format: date-time
+                required:
+                  - householdId
+                  - personId
+                  - validFrom
+                  - kind
+                  - amountCents
+                  - percentBp
+                  - updatedAt
+                description: gültige Regel im Monat
               targetCents:
                 type:
                   - integer
@@ -1322,14 +1355,22 @@ components:
               repaidCents:
                 type: integer
                 description: erstattet (Überweisung, von Hand)
+              debtCents:
+                type: integer
+                description: vom gemeinsamen Konto bezahlte private Ausgaben
+              paidBackCents:
+                type: integer
+                description: zurückgezahlt (Überweisung aufs gemeinsame Konto)
               openCents:
                 type: integer
-                description: schuldet das Gemeinsame der Person noch; negativ = zu viel
+                description: "Saldo: positiv = schuldet das Gemeinsame der Person, negativ = schuldet die Person dem Gemeinsamen"
             required:
               - personId
               - displayName
               - claimedCents
               - repaidCents
+              - debtCents
+              - paidBackCents
               - openCents
         openItems:
           type: array
@@ -1362,6 +1403,38 @@ components:
               - counterpartyName
               - amountCents
               - openCents
+        openDebts:
+          type: array
+          items:
+            type: object
+            properties:
+              transactionId:
+                type: string
+                format: uuid
+              personId:
+                type: string
+                format: uuid
+              bookingDate:
+                type: string
+                format: date
+                example: 2026-11-03
+              counterpartyName:
+                type:
+                  - string
+                  - "null"
+              amountCents:
+                type: integer
+                description: privater Anteil der Buchung
+              openCents:
+                type: integer
+            required:
+              - transactionId
+              - personId
+              - bookingDate
+              - counterpartyName
+              - amountCents
+              - openCents
+          description: Buchungen des gemeinsamen Kontos in privaten Töpfen, die noch nicht zurückgezahlt oder mit Forderungen verrechnet sind (ohne den Topf selbst)
         manual:
           type: array
           items:
@@ -1397,7 +1470,178 @@ components:
         - householdId
         - balances
         - openItems
+        - openDebts
         - manual
+    Metrics:
+      type: object
+      properties:
+        householdId:
+          type: string
+          format: uuid
+        from:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        to:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        months:
+          type: array
+          items:
+            $ref: "#/components/schemas/MonthMetrics"
+        totals:
+          $ref: "#/components/schemas/MetricsTotals"
+        runway:
+          $ref: "#/components/schemas/Runway"
+      required:
+        - householdId
+        - from
+        - to
+        - months
+        - totals
+        - runway
+    MonthMetrics:
+      type: object
+      properties:
+        month:
+          type: string
+          pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          example: 2026-11
+        incomeCents:
+          type: integer
+          description: "Einkommen: Einnahme-Aufteilungen; im gemeinsamen Haushalt auch die Einzahlungen der Personen"
+        consumptionCents:
+          type: integer
+          description: "Konsum (positiv = ausgegeben): Töpfe außer Erst-ich, abzüglich Erstattungen, plus nicht zugeordnete Ausgänge"
+        erstIchCents:
+          type: integer
+          description: Ausgaben aus Erst-ich-Töpfen (Sparen, kein Konsum)
+        contributionsCents:
+          type: integer
+          description: "Einzahlungen ins Gemeinsame vom privaten Konto (positiv = abgeflossen): kein Konsum, aber auch nicht gespart"
+        savedCents:
+          type: integer
+          description: Einkommen − Konsum − Einzahlungen
+        savingsRateBp:
+          type:
+            - integer
+            - "null"
+          description: "Sparquote: Gespart ÷ Einkommen, in Basispunkten"
+        fixedCostsCents:
+          type: integer
+          description: Konsum aus wiederkehrenden Ausgängen (Miete, Versicherungen, Abos)
+        fixedCostShareBp:
+          type:
+            - integer
+            - "null"
+          description: Fixkosten ÷ Einkommen, in Basispunkten
+        uncategorizedOutCents:
+          type: integer
+          description: nicht zugeordnete Ausgänge
+        uncategorizedInCents:
+          type: integer
+          description: nicht zugeordnete Eingänge (zählen nicht als Einkommen)
+        ageOfMoneyDays:
+          type:
+            - integer
+            - "null"
+          description: "Alter des Geldes am Monatsende (bzw. heute): Durchschnitt der letzten 10 Ausgänge, wie lange das ausgegebene Geld schon da war (älteste Eingänge zuerst verbraucht)"
+      required:
+        - month
+        - incomeCents
+        - consumptionCents
+        - erstIchCents
+        - contributionsCents
+        - savedCents
+        - savingsRateBp
+        - fixedCostsCents
+        - fixedCostShareBp
+        - uncategorizedOutCents
+        - uncategorizedInCents
+        - ageOfMoneyDays
+    MetricsTotals:
+      type: object
+      properties:
+        incomeCents:
+          type: integer
+          description: "Einkommen: Einnahme-Aufteilungen; im gemeinsamen Haushalt auch die Einzahlungen der Personen"
+        consumptionCents:
+          type: integer
+          description: "Konsum (positiv = ausgegeben): Töpfe außer Erst-ich, abzüglich Erstattungen, plus nicht zugeordnete Ausgänge"
+        erstIchCents:
+          type: integer
+          description: Ausgaben aus Erst-ich-Töpfen (Sparen, kein Konsum)
+        contributionsCents:
+          type: integer
+          description: "Einzahlungen ins Gemeinsame vom privaten Konto (positiv = abgeflossen): kein Konsum, aber auch nicht gespart"
+        savedCents:
+          type: integer
+          description: Einkommen − Konsum − Einzahlungen
+        savingsRateBp:
+          type:
+            - integer
+            - "null"
+          description: "Sparquote: Gespart ÷ Einkommen, in Basispunkten"
+        fixedCostsCents:
+          type: integer
+          description: Konsum aus wiederkehrenden Ausgängen (Miete, Versicherungen, Abos)
+        fixedCostShareBp:
+          type:
+            - integer
+            - "null"
+          description: Fixkosten ÷ Einkommen, in Basispunkten
+        uncategorizedOutCents:
+          type: integer
+          description: nicht zugeordnete Ausgänge
+        uncategorizedInCents:
+          type: integer
+          description: nicht zugeordnete Eingänge (zählen nicht als Einkommen)
+      required:
+        - incomeCents
+        - consumptionCents
+        - erstIchCents
+        - contributionsCents
+        - savedCents
+        - savingsRateBp
+        - fixedCostsCents
+        - fixedCostShareBp
+        - uncategorizedOutCents
+        - uncategorizedInCents
+    Runway:
+      type: object
+      properties:
+        cashCents:
+          type: integer
+          description: "Geld des Haushalts heute: Noch ohne Aufgabe + alle Töpfe + nicht zugeordnete Buchungen"
+        averageMonthlyConsumptionCents:
+          type:
+            - integer
+            - "null"
+        fixedContributionsCents:
+          type: integer
+          description: Feste Einzahlungen ins Gemeinsame, die jetzt gelten (nur privat; Prozent vom Netto zählt nicht)
+        monthlyOutflowCents:
+          type:
+            - integer
+            - "null"
+          description: Konsum im Schnitt + feste Einzahlungen; null ohne Historie
+        basedOnMonths:
+          type: integer
+          description: abgeschlossene Monate im Schnitt (höchstens 6)
+        months:
+          type:
+            - number
+            - "null"
+          description: Monate ohne Einkommen bei diesem Abfluss, eine Nachkommastelle
+          example: 7.4
+      required:
+        - cashCents
+        - averageMonthlyConsumptionCents
+        - fixedContributionsCents
+        - monthlyOutflowCents
+        - basedOnMonths
+        - months
     Flow:
       type: object
       properties:
@@ -2466,6 +2710,19 @@ paths:
                   maximum: 100000
                 archived:
                   type: boolean
+                clear:
+                  type: array
+                  items:
+                    type: string
+                    enum:
+                      - groupName
+                      - amountCents
+                      - percentBp
+                      - targetMonth
+                  maxItems: 4
+                  description: Felder, die geleert werden (wie `null`). Für Clients, die `null` nicht senden können. Ein Feld darf nicht zugleich einen Wert bekommen.
+                  example:
+                    - amountCents
       responses:
         "200":
           description: Topf geändert
@@ -2499,6 +2756,74 @@ paths:
                 $ref: "#/components/schemas/Error"
         "422":
           description: Plan passt nicht zum Topf-Typ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/households/{householdId}/pot-order:
+    put:
+      tags:
+        - Budget
+      summary: Töpfe sortieren
+      description: Legt die Reihenfolge aller aktiven Töpfe eines Haushalts in einem Schritt fest (sortOrder = Position). Die Liste muss genau die aktiven Töpfe enthalten. Erst-ich-Töpfe werden in dieser Reihenfolge gefüllt; die Automatik läuft danach für den laufenden Monat neu.
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+      requestBody:
+        description: IDs der aktiven Töpfe in der neuen Reihenfolge
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                potIds:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                  maxItems: 1000
+              required:
+                - potIds
+      responses:
+        "200":
+          description: Aktive Töpfe in neuer Reihenfolge
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Pot"
+                required:
+                  - items
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Liste passt nicht zu den aktiven Töpfen des Haushalts
           content:
             application/json:
               schema:
@@ -3495,7 +3820,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Metrics"
+                $ref: "#/components/schemas/PersonMetrics"
         "400":
           description: Ungültige Anfrage
           content:
@@ -3745,8 +4070,8 @@ paths:
     get:
       tags:
         - Paar
-      summary: "Ausgleich: was das Gemeinsame jeder Person für privat bezahlte Ausgaben schuldet"
-      description: Entsteht, wenn eine Buchung eines privaten Kontos einem Topf des gemeinsamen Haushalts zugeordnet wird. Erledigt wird er durch eine Überweisung vom gemeinsamen Konto (Art ausgleich) oder von Hand. Erstattungen decken die Ausgaben der Reihe nach, älteste zuerst.
+      summary: "Ausgleich: was das Gemeinsame und die Personen einander schulden"
+      description: Eine Forderung entsteht, wenn eine Buchung eines privaten Kontos einem Topf des gemeinsamen Haushalts zugeordnet wird. Erledigt wird sie durch eine Überweisung vom gemeinsamen Konto (Art ausgleich) oder von Hand. Eine Schuld entsteht umgekehrt, wenn eine Buchung des gemeinsamen Kontos dem privaten Topf einer Person zugeordnet wird; sie zahlt sie per Überweisung aufs gemeinsame Konto (Art ausgleich) zurück. Forderung und Schuld verrechnen sich; Erstattungen decken der Reihe nach, älteste zuerst.
       security: *a1
       parameters:
         - schema:

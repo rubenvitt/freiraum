@@ -54,7 +54,7 @@ private let transactionJSON = """
         let transport = FakeTransport { _ in
             (200, """
             {"householdId":"h1","month":"2026-11","budgetStartMonth":"2026-10","closedAt":null,"readyToAssignCents":21500,
-             "openingBalanceCents":0,"inflowsCents":250000,
+             "openingBalanceCents":0,"inflowsCents":250000,"contributionsCents":0,
              "assignedCents":0,"activityCents":0,"overspentPreviousCents":0,"assignedInFutureCents":0,
              "unconfirmedTransactions":2,"pots":[{"potId":"p1","name":"Freizeit","kind":"monatlich","groupName":null,
              "archived":false,"carryoverCents":0,"assignedCents":15000,"assignmentSource":"manuell","activityCents":-8800,

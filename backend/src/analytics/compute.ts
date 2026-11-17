@@ -256,8 +256,15 @@ export interface Runway {
   cashCents: number
   /** Durchschnittlicher Konsum der letzten (bis zu) 6 abgeschlossenen Monate */
   averageMonthlyConsumptionCents: number | null
+  /**
+   * Feste Einzahlungen ins Gemeinsame, die jetzt gelten: Sie laufen auch ohne Einkommen weiter.
+   * Ein Anteil vom Netto fällt ohne Einkommen weg und zählt nicht (ADR 0005).
+   */
+  fixedContributionsCents: number
+  /** Laufender Abfluss je Monat = Konsum + feste Einzahlungen; null ohne Historie */
+  monthlyOutflowCents: number | null
   basedOnMonths: number
-  /** Monate ohne Einkommen bei diesem Konsum, eine Nachkommastelle */
+  /** Monate ohne Einkommen bei diesem Abfluss, eine Nachkommastelle */
   months: number | null
 }
 
@@ -266,6 +273,7 @@ export function runway(
   pots: AnalyticsPot[],
   cashCents: number,
   asOf: IsoDate,
+  fixedContributionsCents = 0,
 ): Runway {
   const potKinds = new Map(pots.map((p) => [p.id, p.kind]))
   const perMonth = byMonth(transactions, potKinds)
@@ -276,15 +284,26 @@ export function runway(
       ? []
       : monthRange(maxMonth(first, addMonthsTo(current, -6)), addMonthsTo(current, -1))
   if (months.length === 0) {
-    return { cashCents, averageMonthlyConsumptionCents: null, basedOnMonths: 0, months: null }
+    // Ohne Konsum-Historie wäre ein Runway nur aus den Einzahlungen geschönt: lieber keiner.
+    return {
+      cashCents,
+      averageMonthlyConsumptionCents: null,
+      fixedContributionsCents,
+      monthlyOutflowCents: null,
+      basedOnMonths: 0,
+      months: null,
+    }
   }
   const sum = months.reduce((n, m) => n + (perMonth.get(m)?.consumptionCents ?? 0), 0)
   const average = Math.round(sum / months.length)
+  const outflow = average + fixedContributionsCents
   return {
     cashCents,
     averageMonthlyConsumptionCents: average,
+    fixedContributionsCents,
+    monthlyOutflowCents: outflow,
     basedOnMonths: months.length,
-    months: average > 0 ? Math.max(0, Math.round((cashCents / average) * 10) / 10) : null,
+    months: outflow > 0 ? Math.max(0, Math.round((cashCents / outflow) * 10) / 10) : null,
   }
 }
 
