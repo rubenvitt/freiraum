@@ -45,6 +45,9 @@ für iOS und macOS ohne Signatur.
 
 ## Hinweise
 
+- Neuer Haushalt: In den Einstellungen unter „Budgetbeginn und Kontostände“ den Startmonat wählen,
+  Konten anlegen (falls der Import noch keine kennt) und je Konto einen Kontostand mit Stichtag
+  eintragen. Die Summe zählt im Startmonat zu „Noch ohne Aufgabe“.
 - Töpfe richtet die App selbst ein: Reiter „Töpfe“, Knopf oben rechts (Tippen = neuer Topf,
   gedrückt halten = Reihenfolge und archivierte Töpfe). Bearbeiten und Archivieren über langes
   Drücken auf einen Topf oder „Topf bearbeiten“ im Zuweisungsblatt. Geleert werden Felder über

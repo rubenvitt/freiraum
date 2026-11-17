@@ -15,6 +15,24 @@ struct SettingsView: View {
                         LabeledContent("Zuletzt geladen", value: last.formatted(date: .omitted, time: .shortened))
                     }
                 }
+                if !model.households.isEmpty {
+                    Section {
+                        ForEach(model.households) { household in
+                            NavigationLink {
+                                BudgetStartView(household: household)
+                            } label: {
+                                LabeledContent(
+                                    household.kind == .privat ? "Mein Budget" : household.name,
+                                    value: model.budgets[household.id]?.startMonth.map { "ab \($0.title)" } ?? ""
+                                )
+                            }
+                        }
+                    } header: {
+                        Text("Budgetbeginn und Kontostände")
+                    } footer: {
+                        Text("Ab welchem Monat Freiraum rechnet und mit wie viel Geld du startest.")
+                    }
+                }
                 Section {
                     Button("Benachrichtigungen erlauben") {
                         Task { await Notifications.requestPermission() }

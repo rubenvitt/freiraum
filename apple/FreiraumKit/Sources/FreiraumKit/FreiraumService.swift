@@ -7,7 +7,8 @@ import OpenAPIURLSession
 /// der App ab und wirft `APIError` mit der Meldung des Servers.
 public final class FreiraumService: Sendable {
     public let baseURL: URL
-    private let client: Client
+    // Nicht privat, damit Erweiterungen in eigenen Dateien (z. B. BudgetStart.swift) ihn nutzen.
+    let client: Client
 
     /// - Parameters:
     ///   - baseURL: z. B. `https://freiraum.example.org` (ohne Pfad)
@@ -30,7 +31,7 @@ public final class FreiraumService: Sendable {
     /// Relying-Party-ID, falls der Server keine nennt: der Hostname.
     private var fallbackRelyingPartyId: String { baseURL.host ?? "" }
 
-    private func call<T>(_ body: () async throws -> T) async throws(APIError) -> T {
+    func call<T>(_ body: () async throws -> T) async throws(APIError) -> T {
         do {
             return try await body()
         } catch {
@@ -38,7 +39,7 @@ public final class FreiraumService: Sendable {
         }
     }
 
-    private func unexpected(_ output: some Any) -> APIError {
+    func unexpected(_ output: some Any) -> APIError {
         .unexpected(String(describing: output).prefix(200).description)
     }
 
