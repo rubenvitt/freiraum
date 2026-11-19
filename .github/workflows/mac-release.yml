@@ -14,7 +14,7 @@ name: Mac-Release
 on:
   push:
     branches: [main]
-    paths: ['apple/**', '!apple/**/*.md', 'openapi/**', '.github/workflows/mac-release.yml']
+    paths: ['apple/**', '!apple/*.md', '!apple/**/*.md', 'openapi/**', '.github/workflows/mac-release.yml']
   workflow_dispatch:
     inputs:
       dry_run:
@@ -289,7 +289,7 @@ jobs:
           fi
           xcrun stapler staple "$AUSGABE/Freiraum.dmg"
           xcrun stapler validate "$AUSGABE/Freiraum.dmg"
-          spctl --assess --type open --context context:primary-signature --verbose=2 \
+          spctl --assess --type open --context context:primary-signature \
             "$AUSGABE/Freiraum.dmg"
 
       # EdDSA-Signatur fürs Update erst nach dem Anheften: Sparkle prüft die fertige Datei.
