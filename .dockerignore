@@ -1,0 +1,14 @@
+# Build-Kontext ist das Repo-Wurzelverzeichnis (backend/Dockerfile); nur backend/ und web/ zählen.
+**/node_modules
+**/dist
+backend/test
+**/*.log
+.git
+.github
+.superpowers
+apple
+docs
+deploy
+openapi
+**/.env
+**/.env.*

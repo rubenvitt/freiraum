@@ -1,0 +1,34 @@
+name: Web
+
+on:
+  push:
+    branches: [main]
+    paths: ['web/**', 'openapi/**', '.github/workflows/web.yml']
+  pull_request:
+    paths: ['web/**', 'openapi/**', '.github/workflows/web.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      # Prüft u. a., dass src/api/schema.d.ts zu openapi/openapi.yaml passt (sonst: pnpm gen).
+      - run: pnpm test
+      - run: pnpm build

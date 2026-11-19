@@ -47,7 +47,8 @@ Mehrwert bei einem einzigen Server.
   gebunden, laufen nach 5 Minuten ab und werden beim ersten Prüfversuch verbraucht.
 - Nach erfolgreicher Prüfung gibt es ein **Bearer-Token** (`frs_…`), gespeichert nur als
   SHA-256-Hash. Gleitender Ablauf (Standard 90 Tage ab letzter Nutzung). Für das Web kann später
-  ein Cookie mit demselben Sitzungsmodell dazukommen.
+  ein Cookie mit demselben Sitzungsmodell dazukommen. (Umgesetzt in E6:
+  [ADR 0007](0007-web-oberflaeche.md).)
 
 Verworfen: **Sign in with Apple**. Braucht für jede Plattform zusätzliche Einrichtung, bindet die
 Identität an Apple-IDs und hilft im Browser nicht. Passkeys sind ohnehin über iCloud-Schlüsselbund

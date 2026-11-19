@@ -36,8 +36,8 @@ an den Server oder in Logs.
 
 ### Passkey im Browser anlegen
 
-1. `https://<domain>/registrieren` im Safari auf dem iPhone oder Mac öffnen (`/` leitet dorthin
-   weiter). Den Link aus der Ausgabe öffnen oder das Token einfügen.
+1. `https://<domain>/registrieren` im Safari auf dem iPhone oder Mac öffnen. Den Link aus der
+   Ausgabe öffnen oder das Token einfügen.
 2. „Passkey anlegen“ → Face ID / Touch ID bestätigen → „Passkey angelegt für <Name>“.
    Die Einladung ist damit verbraucht. Der Passkey liegt im iCloud-Schlüsselbund und steht so
    auch auf den anderen Apple-Geräten der Person bereit.
@@ -51,6 +51,18 @@ an den Server oder in Logs.
 
 Die Seite funktioniert nur über die Domain aus `WEBAUTHN_RP_ID` (bzw. eine Subdomain davon, die in
 `WEBAUTHN_ORIGINS` steht) und nur per HTTPS. Unter einer anderen Adresse meldet sie das.
+
+## Web-Oberfläche
+
+Unter `https://<domain>/` liegen die Auswertungen im Browser (E6, ADR 0007). Sie sind im Image
+enthalten, es braucht nichts Zusätzliches. Angemeldet wird mit demselben Passkey wie in den Apps.
+Die Sitzung liegt in einem HttpOnly-Cookie und bleibt bis zu `SESSION_TTL_DAYS` ohne Nutzung
+bestehen. Das Cookie öffnet nur lesende Anfragen und das Abmelden.
+
+- Die Seite läuft nur unter einer Adresse aus `WEBAUTHN_ORIGINS` (Standard: `https://<WEBAUTHN_RP_ID>`).
+  Abmelden über eine andere Adresse lehnt der Server ab.
+- `WEB_DIST_DIR` ist nur nötig, wenn der Build woanders liegt. Ohne Build führt `/` zur
+  Registrierung.
 
 ### Weitere Geräte und Wiederherstellung
 
