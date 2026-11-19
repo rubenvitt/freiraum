@@ -10,9 +10,12 @@ Entscheidungen: [ADR 0004](../docs/adr/0004-ios-app.md), Auswertungen:
 - `FreiraumKit/`: Swift-Paket ohne Oberfläche, baut und testet auch unter Linux.
   - `FreiraumAPI`: Client, beim Bauen aus `openapi/openapi.yaml` erzeugt (swift-openapi-generator).
   - `FreiraumKit`: Dienst, Modelle, Beträge, Monate, Übersicht, Bestätigen, Eingaben, Widget-Schnappschuss,
-    Planung (Umschichten, Abschluss), Auswertungen samt Sankey-Layout, Menüleiste.
-- `Freiraum/`: App (Anmeldung, Übersicht, Töpfe, Bestätigen, Barausgabe, Verteilen, Einzahlungen).
-  `Freiraum/Views/Mac/`: nur macOS (Seitenleiste, Planung, Auswertungen, Menüleiste).
+    Planung (Umschichten, Abschluss), Auswertungen samt Sankey-Layout und Liste „woher/wohin“,
+    Menüleiste.
+- `Freiraum/`: App (Anmeldung, Übersicht, Töpfe, Bestätigen, Barausgabe, Verteilen, Einzahlungen,
+  Auswertung und Ziele). `Freiraum/Views/Analytics/`: Bausteine der Auswertungen für iPhone und Mac
+  (Kacheln, Diagramme, Ziele, Besitz). `Freiraum/Views/Mac/`: nur macOS (Seitenleiste, Planung,
+  Auswertungen mit Sankey, Menüleiste).
 - `FreiraumWidget/`: Widget „Freies Budget“.
 - `Config/`: Build-Einstellungen; persönliche Werte in `Local.xcconfig` (nicht im Repo).
 
@@ -77,6 +80,10 @@ die CI.
   Im Simulator lässt sich der Abruf in Xcode über *Debug › Simulate Background Fetch* auslösen.
 - Das Widget zeigt den privaten Haushalt im laufenden Monat und liest nur, was die App zuletzt
   geladen hat.
+- Reiter „Auswertung“: Zeitraum (Monat, Quartal, Jahr), Kennzahlen (Sparquote, Fixkosten, Runway,
+  Alter des Geldes), Geldfluss als Liste „Woher“ und „Wohin“ (statt Sankey; Gruppen statt einzelner
+  Töpfe), ein Verlauf zum Umschalten, Auffälligkeiten des Monats und Besitzkosten.
+- Reiter „Ziele“: Ziel-Töpfe des gewählten Haushalts mit Fortschritt und Prognose.
 
 ## Mac
 

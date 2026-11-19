@@ -24,6 +24,11 @@ enum Theme {
         case .low, .overspent: warning
         }
     }
+
+    /// Fortschritt eines Ziels: Blau im gemeinsamen Haushalt, sonst Minze.
+    static func goalColor(for kind: Household.Kind) -> Color {
+        kind == .gemeinsam ? shared : accent
+    }
 }
 
 /// Hintergrund mit zwei weichen Lichtflecken wie im Entwurf.

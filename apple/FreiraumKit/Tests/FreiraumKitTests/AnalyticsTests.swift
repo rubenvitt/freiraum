@@ -224,6 +224,7 @@ private let ownershipJSON = """
         #expect(s.tiles[3].value == "–")
         #expect(s.savingsRate.first?.value == nil)
         #expect(s.flowSummary == "Im Zeitraum ist noch nichts geflossen.")
+        #expect(s.flowList.isEmpty)
         #expect(s.uncategorizedNote?.hasPrefix("Noch nicht zugeordnet: 8\u{00A0}€ Eingänge und 12\u{00A0}€ Ausgänge.") == true)
     }
 

@@ -37,7 +37,7 @@ final class AppModel {
     private(set) var contributionRules: [String: [ContributionRule]] = [:]
     private(set) var shares: Shares?
 
-    // MARK: Auswertungen und Menüleiste (Mac)
+    // MARK: Auswertungen (iPhone und Mac), Menüleiste (Mac)
 
     var analyticsPeriod: AnalyticsPeriod = .monat
     /// Aufbereitete Auswertung je Haushalt (für den angezeigten Monat und Zeitraum).
@@ -792,7 +792,7 @@ final class AppModel {
         return message
     }
 
-    // MARK: Auswertungen (Mac)
+    // MARK: Auswertungen
 
     /// Auswertung eines Haushalts für den angezeigten Monat und `analyticsPeriod` laden. Der
     /// Zeitraum beginnt frühestens mit dem Budgetbeginn (ADR 0005).
@@ -817,12 +817,15 @@ final class AppModel {
         } catch {
             report(error)
         }
-        // Über Haushalte hinweg nur mit gemeinsamem Haushalt; ein Fehler hier lässt den Rest stehen.
+        // Über Haushalte hinweg nur mit gemeinsamem Haushalt und nur am Mac (Sankey); ein Fehler
+        // hier lässt den Rest stehen.
+        #if os(macOS)
         if let person, households.count > 1 {
             personFlow = try? await service.personFlow(personId: person.id, from: period.lowerBound, to: period.upperBound)
         } else {
             personFlow = nil
         }
+        #endif
     }
 
     // MARK: Menüleiste (Mac)
