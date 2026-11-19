@@ -99,7 +99,21 @@ Der Workflow schreibt aus den Variablen eine `apple/Config/Local.xcconfig` (Team
 Feed-URL des Repos, Sparkle-Schlüssel, manuelle Signatur mit „Developer ID Application“ und dem
 Profil) und löscht sie am Ende wieder. Lokal ändert sich nichts.
 
-## 6. Erster Lauf
+## 6. Server
+
+Auf dem Server in `deploy/.env` setzen und neu starten:
+
+```
+APPLE_APP_IDS=ABCDE12345.de.example.freiraum
+```
+
+Prüfen: `https://freiraum.example.org/.well-known/apple-app-site-association` nennt die App-ID.
+Siehe [`deploy/README.md`](../deploy/README.md).
+
+## 7. Erster Lauf
+
+Voraussetzung: Der Server liefert `apple-app-site-association` mit der App-ID aus Schritt 6
+(sonst scheitert die Passkey-Anmeldung in Punkt 4).
 
 GitHub bietet „Run workflow“ erst an, wenn der Workflow auf `main` liegt. Deshalb:
 
@@ -113,19 +127,14 @@ GitHub bietet „Run workflow“ erst an, wenn der Workflow auf `main` liegt. De
 5. Noch einmal *Run workflow*, **dry_run** abgehakt: der erste echte Release. Ab da erzeugt jeder
    passende Merge auf `main` einen.
 
+6. Update-Test: Die Probe-App (aus Punkt 4, Version `0.1.<N>`) installiert lassen und den ersten
+   echten Release veröffentlichen (Punkt 5). Dann in der Probe-App *Nach Updates suchen …*
+   wählen: Sie muss `0.1.<N+1>` finden und installieren. Das beweist auch, dass
+   `SPARKLE_PUBLIC_KEY` zum `SPARKLE_PRIVATE_KEY` passt; ein Fehlpaar zeigt sich sonst erst, wenn
+   Updates stillschweigend nicht ankommen.
+
 Der Download-Link ist dann
 `https://github.com/rubenvitt/freiraum/releases/latest/download/Freiraum.dmg`.
-
-## 7. Server
-
-Auf dem Server in `deploy/.env` setzen und neu starten:
-
-```
-APPLE_APP_IDS=ABCDE12345.de.example.freiraum
-```
-
-Prüfen: `https://freiraum.example.org/.well-known/apple-app-site-association` nennt die App-ID.
-Siehe [`deploy/README.md`](../deploy/README.md).
 
 ## 8. Wartung
 
@@ -140,13 +149,17 @@ Siehe [`deploy/README.md`](../deploy/README.md).
 - **Andere Releases:** `gh release create … --latest=false`. „Latest“ gehört dem Mac-Release, weil
   der Update-Feed über `releases/latest/download/appcast.xml` läuft. Ohne die Option finden
   installierte Apps keine Updates mehr (ADR 0007).
-- **App-Key rotieren:** Neuer Sparkle-Schlüssel heißt: alle installierten Apps müssen einmal per
+- **Sparkle-Schlüssel rotieren:** Neuer Sparkle-Schlüssel heißt: alle installierten Apps müssen einmal per
   Hand neu geladen werden. Nur im Notfall.
 
 ## Fehlersuche
 
 - **Lauf endet grün, aber ohne Release:** Warnung „Signatur-Secrets nicht konfiguriert“. Secrets
-  eintragen. Bei „Es fehlen: …“ nennt die Meldung die fehlenden Namen.
+  eintragen. Bei „Es fehlen: …“ nennt die Meldung die fehlenden Namen. Weitere Ursache: manueller
+  Start von einem anderen Branch als `main` oder mit `dry_run`.
+- **Erneuter Lauf nach erfolgreichem Release:** Der Workflow meldet „Release macos-v… existiert
+  schon“ und überspringt das Anlegen; das ist gewollt. Für einen neuen Release einen neuen Merge
+  (neue Lauf-Nummer) auslösen.
 - **Keine Identität „Developer ID Application“:** Die `.p12` enthält den privaten Schlüssel nicht
   (Zertifikat ohne aufgeklappten Schlüssel exportiert) oder das falsche Zertifikat.
 - **Notarisierung fehlgeschlagen:** Das Protokoll steht im Log des Schritts „Notarisieren“ (der

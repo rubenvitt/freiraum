@@ -38,11 +38,12 @@ in der App „Einladung einlösen“, Token einfügen, Passkey anlegen. Danach r
 ## Mac-App installieren
 
 1. [Freiraum.dmg laden](https://github.com/rubenvitt/freiraum/releases/latest/download/Freiraum.dmg)
-   (signiert und notarisiert), öffnen, „Freiraum“ nach *Programme* ziehen.
+   (ab dem ersten Release; signiert und notarisiert), öffnen, „Freiraum“ nach *Programme* ziehen.
 2. Starten und mit Passkey anmelden (Einladung wie unter „Einrichten“).
 
 Die App sucht stündlich nach Updates, lädt sie im Hintergrund und installiert sie beim nächsten
-Beenden. „Nach Updates suchen …“ im App-Menü prüft sofort. Selbst gebaute Apps aktualisieren sich
+Beenden; da die App im Menüleistensymbol weiterläuft, kann ein Update bis zum nächsten Beenden
+oder Neustart warten. „Nach Updates suchen …“ im App-Menü prüft sofort. Selbst gebaute Apps aktualisieren sich
 nicht. Releases entstehen bei jedem Merge auf `main`, der `apple/**` oder `openapi/**` ändert;
 Einrichtung und Wartung: [`RELEASE.md`](RELEASE.md), Entscheidungen:
 [ADR 0007](../docs/adr/0007-mac-releases.md).

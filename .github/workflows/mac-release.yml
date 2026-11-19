@@ -14,7 +14,7 @@ name: Mac-Release
 on:
   push:
     branches: [main]
-    paths: ['apple/**', 'openapi/**', '.github/workflows/mac-release.yml']
+    paths: ['apple/**', '!apple/**/*.md', 'openapi/**', '.github/workflows/mac-release.yml']
   workflow_dispatch:
     inputs:
       dry_run:
@@ -142,17 +142,16 @@ jobs:
           alte="$(security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//')"
           # shellcheck disable=SC2086 # Liste absichtlich wortweise
           security list-keychains -d user -s "$KEYCHAIN" $alte
-          security find-identity -v -p codesigning "$KEYCHAIN"
           if ! security find-identity -v -p codesigning "$KEYCHAIN" | grep -q 'Developer ID Application'; then
             echo "::error::Keine gültige Identität (Developer ID Application) im Zertifikat."
             exit 1
           fi
 
-          # Profil: UUID (für xcconfig und Export) und Name (fürs Protokoll) aus dem signierten Inhalt.
+          # Profil: UUID (für xcconfig und Export) aus dem signierten Inhalt. Nichts davon ins
+          # (öffentliche) Protokoll schreiben.
           printf '%s' "$MACOS_PROVISIONING_PROFILE" | base64 --decode > "$GEHEIM/profil.provisionprofile"
           security cms -D -i "$GEHEIM/profil.provisionprofile" > "$GEHEIM/profil.plist"
           uuid="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$GEHEIM/profil.plist")"
-          name="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$GEHEIM/profil.plist")"
           # UUID vor dem Kopieren festhalten, damit das Aufräumen das Profil auch nach einem Fehler findet.
           echo "PROFIL_UUID=$uuid" >> "$GITHUB_ENV"
           # Klassischer Ort und der seit Xcode 16 genutzte; je nach Xcode-Version liest es den einen
@@ -162,7 +161,6 @@ jobs:
             mkdir -p "$ziel"
             cp "$GEHEIM/profil.provisionprofile" "$ziel/$uuid.provisionprofile"
           done
-          echo "Profil: $name ($uuid)"
 
       # Local.xcconfig aus Variablen. In .xcconfig beginnt „//“ einen Kommentar, deshalb wird jedes
       # „//“ (URL, Base64-Schlüssel) als „/$()/“ geschrieben; $() ist leer.
@@ -187,7 +185,6 @@ jobs:
           PROVISIONING_PROFILE_SPECIFIER = $(xc "$PROFIL_UUID")
           OTHER_CODE_SIGN_FLAGS = --keychain $(xc "$KEYCHAIN")
           EOF
-          sed -e 's/^/  /' Config/Local.xcconfig
 
       - name: Projekt erzeugen
         if: steps.check.outputs.enabled == 'true'
@@ -231,7 +228,6 @@ jobs:
           xcodebuild -exportArchive -archivePath "$ARCHIVE" -exportPath "$EXPORT" \
             -exportOptionsPlist "$optionen"
           codesign --verify --deep --strict --verbose=2 "$EXPORT/Freiraum.app"
-          codesign -dv --verbose=2 "$EXPORT/Freiraum.app" 2>&1 | grep -E '^(Authority|TeamIdentifier|Identifier)='
 
       - name: DMG bauen und signieren
         if: steps.check.outputs.enabled == 'true'
@@ -242,8 +238,19 @@ jobs:
           mkdir -p "$inhalt" "$AUSGABE"
           ditto "$EXPORT/Freiraum.app" "$inhalt/Freiraum.app"
           ln -s /Applications "$inhalt/Applications"
-          hdiutil create -volname Freiraum -srcfolder "$inhalt" -ov -format UDZO \
-            "$AUSGABE/Freiraum.dmg"
+          # „Resource busy“ ist auf gehosteten Runnern ein bekannter Zufallsfehler: bis zu 3 Versuche.
+          for versuch in 1 2 3; do
+            if hdiutil create -volname Freiraum -srcfolder "$inhalt" -ov -format UDZO \
+                 "$AUSGABE/Freiraum.dmg"; then
+              break
+            fi
+            if [ "$versuch" = 3 ]; then
+              echo "::error::hdiutil create schlug dreimal fehl."
+              exit 1
+            fi
+            echo "::warning::hdiutil create fehlgeschlagen (Versuch $versuch), neuer Versuch in 5 s."
+            sleep 5
+          done
           codesign --sign "Developer ID Application" --timestamp --keychain "$KEYCHAIN" \
             "$AUSGABE/Freiraum.dmg"
           codesign --verify --verbose=2 "$AUSGABE/Freiraum.dmg"
@@ -264,16 +271,20 @@ jobs:
             *) printf '%s' "$ASC_KEY_P8" | base64 --decode > "$schluessel" ;;
           esac
           chmod 600 "$schluessel"
+          rc=0
           xcrun notarytool submit "$AUSGABE/Freiraum.dmg" \
             --key "$schluessel" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
-            --wait --timeout 1h --output-format json > "$RUNNER_TEMP/notary.json" || true
-          cat "$RUNNER_TEMP/notary.json"
-          status="$(plutil -extract status raw -o - "$RUNNER_TEMP/notary.json")"
+            --wait --timeout 1h --output-format json > "$RUNNER_TEMP/notary.json" || rc=$?
+          cat "$RUNNER_TEMP/notary.json" || true
+          status="$(plutil -extract status raw -o - "$RUNNER_TEMP/notary.json" 2>/dev/null || true)"
+          id="$(plutil -extract id raw -o - "$RUNNER_TEMP/notary.json" 2>/dev/null || true)"
+          status="${status:-unbekannt}"
           if [ "$status" != "Accepted" ]; then
-            id="$(plutil -extract id raw -o - "$RUNNER_TEMP/notary.json")"
-            xcrun notarytool log "$id" \
-              --key "$schluessel" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
-            echo "::error::Notarisierung fehlgeschlagen: $status"
+            if [ -n "$id" ]; then
+              xcrun notarytool log "$id" \
+                --key "$schluessel" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
+            fi
+            echo "::error::Notarisierung fehlgeschlagen (Status: $status, notarytool-Exit $rc). Ausgabe und Protokoll stehen oben."
             exit 1
           fi
           xcrun stapler staple "$AUSGABE/Freiraum.dmg"
@@ -330,13 +341,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.plan.outputs.version }}
-        run: >-
-          gh release create "macos-v$VERSION"
-          --title "Freiraum für Mac $VERSION"
-          --target "$GITHUB_SHA"
-          --generate-notes
-          --latest
-          "$AUSGABE/Freiraum.dmg" "$AUSGABE/appcast.xml"
+        run: |
+          set -euo pipefail
+          if gh release view "macos-v$VERSION" > /dev/null 2>&1; then
+            echo "::notice::Release macos-v$VERSION existiert schon (erneuter Lauf), Anlegen übersprungen."
+            exit 0
+          fi
+          gh release create "macos-v$VERSION" \
+            --title "Freiraum für Mac $VERSION" \
+            --target "$GITHUB_SHA" \
+            --generate-notes \
+            --latest \
+            "$AUSGABE/Freiraum.dmg" "$AUSGABE/appcast.xml"
 
       - name: Aufräumen
         if: always()

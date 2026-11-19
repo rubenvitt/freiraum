@@ -37,7 +37,7 @@ macOS 26. Spec: `docs/superpowers/specs/2026-11-19-mac-release-design.md`.
 - Auslöser: Push auf `main` mit Pfadfilter, dazu `workflow_dispatch` mit `dry_run` (Standard
   `true`). Der Probelauf baut, signiert und notarisiert, lädt das DMG als Artefakt hoch und legt
   keinen Release an.
-- `concurrency: mac-release` ohne Abbrechen: Releases entstehen nacheinander.
+- `concurrency: mac-release` ohne Abbrechen: Pro Gruppe läuft einer, höchstens einer wartet (siehe Folgen).
 - Job 1 (Linux): `swift test` für FreiraumKit und die Skript-Tests. Ohne grüne Tests kein Release.
 - Job 2 (`macos-26`): temporärer Schlüsselbund mit Zertifikat „Developer ID Application“,
   Provisioning-Profil, `Local.xcconfig` aus Variablen, `xcodegen generate`, `xcodebuild archive`
@@ -79,4 +79,12 @@ Alternative wäre ein fester Feed über GitHub Pages. Heute erzeugt nichts sonst
   ab und muss erneuert werden. Das Zertifikat gilt 5 Jahre.
 - Sparkle in der Sandbox ist eine häufige Fehlerquelle (Installer-Dienst, Entitlements).
 - Der Server braucht weiter `APPLE_APP_IDS` (siehe [ADR 0004](0004-ios-app.md)).
+- Actions-Logs sind öffentlich, und `xcodebuild` zeigt dort weiterhin Signaturname, Team-ID und
+  Profil. Akzeptiert, wie der Release selbst; der Workflow gibt darüber hinaus nichts Persönliches aus.
+- Angeheftet (stapled) wird nur das DMG, nicht die App darin. Der erste Start offline nach dem
+  Kopieren braucht eine Online-Prüfung durch Gatekeeper.
+- Die Concurrency-Gruppe behält nur einen wartenden Lauf: Bei mehreren schnellen Merges entfallen
+  die mittleren Läufe, der neueste gewinnt.
+- Updates werden beim Beenden installiert. Weil die App im Menüleistensymbol weiterläuft, kann ein
+  Update bis zum nächsten Beenden oder Neustart warten.
 - Nicht enthalten: iOS/TestFlight, Delta-Updates, Beta-Kanal, Mac App Store.

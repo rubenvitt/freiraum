@@ -3,7 +3,7 @@
 Persönliches Finanz-Cockpit für Paare: Budget nach dem Topf-Prinzip, getrennte und gemeinsame Konten, Auswertungen wie „Woher kommt mein Geld, wohin fließt es?“, und möglichst wenig Pflegeaufwand.
 
 - Spec: [`docs/superpowers/specs/2026-11-17-freiraum-design.md`](docs/superpowers/specs/2026-11-17-freiraum-design.md)
-- Mac-App: [Freiraum.dmg laden](https://github.com/rubenvitt/freiraum/releases/latest/download/Freiraum.dmg), aktualisiert sich selbst
+- Mac-App: [Freiraum.dmg laden](https://github.com/rubenvitt/freiraum/releases/latest/download/Freiraum.dmg) (ab dem ersten Release), aktualisiert sich selbst
 - Plattformen: Backend (selbst gehostet), iOS und macOS (SwiftUI), später Web
 
 ## Aufbau
