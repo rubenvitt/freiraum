@@ -71,6 +71,8 @@ targets:
       path: FreiraumWidget/Info.plist
       properties:
         CFBundleDisplayName: Freiraum
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
         FreiraumAppGroup: group.$(FREIRAUM_BUNDLE_PREFIX).freiraum
