@@ -18,7 +18,7 @@ import {
   periodRange,
 } from './lib/presentation'
 import { Login } from './login'
-import { readState, type ViewState, writeState } from './state'
+import { fallbackAfterNotFound, mergeState, readState, type ViewState, writeState } from './state'
 import { Sankey } from './views/sankey'
 import { BarTrend, LineTrend } from './views/trends'
 
@@ -132,8 +132,10 @@ export function App() {
 
   const update = useCallback((patch: Partial<ViewState>) => {
     setState((s) => {
-      const nextState = { ...s, ...patch }
-      history.replaceState(null, '', `${location.pathname}${writeState(nextState)}`)
+      const nextState = mergeState(s, patch)
+      if (nextState !== s) {
+        history.replaceState(null, '', `${location.pathname}${writeState(nextState)}`)
+      }
       return nextState
     })
   }, [])
@@ -156,9 +158,13 @@ export function App() {
       })
       .catch((err) => {
         if (cancelled) return
-        if (err instanceof ApiError && err.status === 404 && households?.[0]) {
-          update({ haushalt: households[0].id })
-        }
+        // Nicht gefunden: einmal auf den ersten Haushalt wechseln, sonst Meldung zeigen und stehen
+        // bleiben (kein erneutes Laden mit demselben Ergebnis).
+        const fallback =
+          err instanceof ApiError && err.status === 404 && households
+            ? fallbackAfterNotFound(household.id, households)
+            : null
+        if (fallback) update({ haushalt: fallback })
         fail(err)
       })
       .finally(() => {
@@ -171,16 +177,38 @@ export function App() {
   }, [person, household, month, state, hasShared, households, fail, update, reloads])
 
   async function logout() {
+    setError(null)
     try {
-      await api.POST('/v1/auth/logout')
-    } finally {
-      setPerson(null)
-      setHouseholds(null)
-      setLoaded(null)
+      const { response } = await api.POST('/v1/auth/logout')
+      // 401: Sitzung ohnehin weg. Alles andere heißt: Das Cookie gilt noch.
+      if (!response.ok && response.status !== 401) throw new Error(String(response.status))
+    } catch {
+      setError('Abmelden hat nicht geklappt. Die Sitzung gilt noch; versuch es noch einmal.')
+      return
     }
+    setPerson(null)
+    setHouseholds(null)
+    setLoaded(null)
   }
 
-  if (person === undefined) return <main class="laden">Freiraum lädt …</main>
+  if (person === undefined) {
+    return (
+      <main class="laden">
+        {error ? (
+          <>
+            <p class="meldung warnung" role="alert">
+              {error}
+            </p>
+            <button type="button" class="leicht" onClick={() => location.reload()}>
+              Neu laden
+            </button>
+          </>
+        ) : (
+          'Freiraum lädt …'
+        )}
+      </main>
+    )
+  }
   if (person === null) return <Login onLogin={setPerson} />
 
   const view = household && loaded?.key === loadKey(household.id, month, state) ? loaded : null

@@ -38,3 +38,21 @@ export function writeState(state: ViewState): string {
   const text = q.toString()
   return text ? `?${text}` : ''
 }
+
+/** Neuer Zustand mit den Änderungen; unverändert bleibt es dasselbe Objekt (kein neues Laden). */
+export function mergeState(state: ViewState, patch: Partial<ViewState>): ViewState {
+  const changed = (Object.keys(patch) as (keyof ViewState)[]).some((k) => patch[k] !== state[k])
+  return changed ? { ...state, ...patch } : state
+}
+
+/**
+ * Nach „nicht gefunden“ auf den ersten Haushalt wechseln, aber nur, wenn das ein anderer ist.
+ * Sonst bliebe der Fehler und die Seite lüde endlos neu.
+ */
+export function fallbackAfterNotFound(
+  current: string,
+  households: { id: string }[],
+): string | null {
+  const first = households[0]
+  return first && first.id !== current ? first.id : null
+}

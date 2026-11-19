@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { readState, writeState } from './state'
+import { fallbackAfterNotFound, mergeState, readState, writeState } from './state'
 
 describe('Zustand in der Adresse', () => {
   it('liest und schreibt alle Felder', () => {
@@ -23,5 +23,23 @@ describe('Zustand in der Adresse', () => {
       fluss: 'haushalt',
     })
     expect(readState('?haushalt=..%2Fetc').haushalt).toBeUndefined()
+  })
+})
+
+describe('mergeState', () => {
+  it('behält das alte Objekt, wenn sich nichts ändert', () => {
+    const s = { haushalt: 'a', zeitraum: 'monat' as const, fluss: 'haushalt' as const }
+    expect(mergeState(s, { haushalt: 'a' })).toBe(s)
+    expect(mergeState(s, {})).toBe(s)
+    expect(mergeState(s, { zeitraum: 'jahr' })).toEqual({ ...s, zeitraum: 'jahr' })
+  })
+})
+
+describe('fallbackAfterNotFound', () => {
+  const households = [{ id: 'erster' }, { id: 'zweiter' }]
+  it('wechselt nur auf einen anderen Haushalt', () => {
+    expect(fallbackAfterNotFound('zweiter', households)).toBe('erster')
+    expect(fallbackAfterNotFound('erster', households)).toBeNull()
+    expect(fallbackAfterNotFound('erster', [])).toBeNull()
   })
 })
