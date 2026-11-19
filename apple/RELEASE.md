@@ -1,6 +1,6 @@
 # Mac-Release einrichten
 
-Jeder Merge auf `main`, der `apple/**`, `openapi/**` oder den Workflow ändert, baut über
+Jeder Merge auf `main`, der `apple/**` (ohne reine `.md`-Änderungen), `openapi/**` oder den Workflow ändert, baut über
 `.github/workflows/mac-release.yml` eine signierte, notarisierte Mac-App und legt einen
 GitHub-Release an. Die installierte App aktualisiert sich selbst (Sparkle).
 Entscheidungen: [ADR 0007](../docs/adr/0007-mac-releases.md).

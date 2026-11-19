@@ -44,7 +44,7 @@ in der App „Einladung einlösen“, Token einfügen, Passkey anlegen. Danach r
 Die App sucht stündlich nach Updates, lädt sie im Hintergrund und installiert sie beim nächsten
 Beenden; da die App im Menüleistensymbol weiterläuft, kann ein Update bis zum nächsten Beenden
 oder Neustart warten. „Nach Updates suchen …“ im App-Menü prüft sofort. Selbst gebaute Apps aktualisieren sich
-nicht. Releases entstehen bei jedem Merge auf `main`, der `apple/**` oder `openapi/**` ändert;
+nicht. Releases entstehen bei jedem Merge auf `main`, der `apple/**` (ohne reine `.md`-Änderungen) oder `openapi/**` ändert;
 Einrichtung und Wartung: [`RELEASE.md`](RELEASE.md), Entscheidungen:
 [ADR 0007](../docs/adr/0007-mac-releases.md).
 

@@ -19,7 +19,7 @@ macOS 26. Spec: `docs/superpowers/specs/2026-11-19-mac-release-design.md`.
   Von `0.1` auf `0.2` erhöht man von Hand.
 - Verworfen: Conventional Commits mit release-please (ohne Präfix kein Release, passt nicht zu
   deutschen Commit-Texten) und Labels am PR (Handarbeit).
-- Ein Release entsteht nur bei Änderungen an `apple/**`, `openapi/**` oder am Workflow. Ein reiner
+- Ein Release entsteht nur bei Änderungen an `apple/**` (ohne reine `.md`-Dateien), `openapi/**` oder am Workflow. Ein reiner
   Backend-Merge ergäbe sonst ein identisches „Update“.
 
 ### Ort: öffentliche GitHub-Releases
