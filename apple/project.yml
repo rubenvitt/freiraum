@@ -45,6 +45,9 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         CODE_SIGN_ENTITLEMENTS: Freiraum/Freiraum.entitlements
         "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": Freiraum/Freiraum-macOS.entitlements
+        # Signaturidentität am Mac nur für die App (nicht für Swift-Pakete und Build-Plugins).
+        # Lokal „Apple Development“, im Release-Workflow „Developer ID Application“.
+        "CODE_SIGN_IDENTITY[sdk=macosx*]": $(FREIRAUM_MAC_SIGN_IDENTITY)
         TARGETED_DEVICE_FAMILY: "1"
         ENABLE_HARDENED_RUNTIME: YES
     info:

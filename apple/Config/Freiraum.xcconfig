@@ -8,5 +8,7 @@ FREIRAUM_UPDATE_FEED =
 FREIRAUM_SPARKLE_PUBLIC_KEY =
 DEVELOPMENT_TEAM =
 CODE_SIGN_STYLE = Automatic
+// Signaturidentität der Mac-App; der Release-Workflow setzt „Developer ID Application“.
+FREIRAUM_MAC_SIGN_IDENTITY = Apple Development
 
 #include? "Local.xcconfig"
