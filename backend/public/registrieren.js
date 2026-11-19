@@ -11,6 +11,7 @@ const ui = {
   meldungAnlegen: $('meldung-anlegen'),
   knopfTesten: $('knopf-testen'),
   meldungTesten: $('meldung-testen'),
+  weiter: $('weiter'),
 }
 
 class UserError extends Error {}
@@ -249,6 +250,7 @@ async function register(event) {
       `Passkey angelegt für ${session.person.displayName}. Die Einladung ist damit verbraucht.`,
       'erfolg',
     )
+    ui.weiter.hidden = false
   } catch (err) {
     show(ui.meldungAnlegen, explain(err, 'anlegen'), 'fehler')
   } finally {
@@ -271,6 +273,7 @@ async function testLogin() {
     const me = await api('/v1/me', { method: 'GET', token: session.token })
     await endSession(session.token)
     show(ui.meldungTesten, `Angemeldet als ${me.displayName}. Der Passkey funktioniert.`, 'erfolg')
+    ui.weiter.hidden = false
   } catch (err) {
     show(ui.meldungTesten, explain(err, 'testen'), 'fehler')
   } finally {

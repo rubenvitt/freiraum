@@ -1,5 +1,9 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { setupTestApp } from './helpers/app.js'
+import { createApp } from '../src/app.js'
+import { setupTestApp, testConfig } from './helpers/app.js'
 
 const { db, request } = setupTestApp()
 afterAll(() => db.end())
@@ -31,6 +35,13 @@ describe('Registrierungsseite', () => {
     expect(html).toContain('Anmelden testen')
   })
 
+  it('verweist nach dem Anlegen auf die Auswertung unter /', async () => {
+    const html = await (await get('/registrieren')).text()
+    expect(html).toMatch(/<p id="weiter"[^>]*hidden[^>]*>\s*<a href="\/">Zur Auswertung<\/a>/)
+    const js = await (await get('/registrieren.js')).text()
+    expect(js).toContain('ui.weiter.hidden = false')
+  })
+
   it('führt von der Startseite zur Registrierung', async () => {
     const res = await get('/')
     expect(res.status).toBe(302)
@@ -48,7 +59,7 @@ describe('Registrierungsseite', () => {
     }
     // Alle Verweise bleiben auf dem eigenen Server.
     for (const [, url] of html.matchAll(/\b(?:src|href)="([^"]*)"/gi)) {
-      expect(url).toMatch(/^\/[^/]/)
+      expect(url).toMatch(/^\/(?:[^/]|$)/)
     }
     expect(html).not.toMatch(/\son[a-z]+\s*=/i)
     expect(html).not.toMatch(/\sstyle\s*=/i)
@@ -87,5 +98,55 @@ describe('Registrierungsseite', () => {
     const res = await get('/gibt-es-nicht')
     expect(res.status).toBe(404)
     expect(await res.json()).toMatchObject({ error: { code: 'nicht_gefunden' } })
+  })
+})
+
+describe('Web-Oberfläche', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'freiraum-web-'))
+  mkdirSync(join(dir, 'assets'))
+  writeFileSync(
+    join(dir, 'index.html'),
+    '<!doctype html><title>Freiraum</title><script type="module" src="/assets/app-abc123.js"></script>',
+  )
+  writeFileSync(join(dir, 'assets', 'app-abc123.js'), 'console.log("x")')
+  writeFileSync(join(dir, 'assets', 'app-abc123.css'), 'body{}')
+  const { app: webApp } = createApp({ db, config: { ...testConfig, webDistDir: dir } })
+  const getWeb = (path: string) => webApp.request(path)
+
+  it('/ liefert index.html mit strengen Headern', async () => {
+    const res = await getWeb('/')
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8')
+    expect(res.headers.get('cache-control')).toBe('no-store')
+    expectStrictHeaders(res)
+    expect(await res.text()).toContain('<title>Freiraum</title>')
+  })
+
+  it('/assets liefert gelistete Dateien unveränderlich', async () => {
+    const js = await getWeb('/assets/app-abc123.js')
+    expect(js.status).toBe(200)
+    expect(js.headers.get('content-type')).toBe('text/javascript; charset=utf-8')
+    expect(js.headers.get('cache-control')).toBe('public, max-age=31536000, immutable')
+    expectStrictHeaders(js)
+    const css = await getWeb('/assets/app-abc123.css')
+    expect(css.headers.get('content-type')).toBe('text/css; charset=utf-8')
+  })
+
+  it('/assets lehnt Unbekanntes und Pfad-Tricks ab', async () => {
+    for (const path of [
+      '/assets/fehlt.js',
+      '/assets/../index.html',
+      '/assets/%2e%2e%2findex.html',
+      '/assets/..%2f..%2fpackage.json',
+      '/assets/',
+    ]) {
+      const res = await getWeb(path)
+      expect(res.status, path).toBe(404)
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('nicht_gefunden')
+    }
+  })
+
+  it('/registrieren bleibt erreichbar', async () => {
+    expect((await getWeb('/registrieren')).status).toBe(200)
   })
 })

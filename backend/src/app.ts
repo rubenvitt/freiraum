@@ -127,7 +127,7 @@ export function createApp(deps: { db: Db; config: Config; llm?: LlmCategorizer |
   categorizeRoutes(app)
   coupleRoutes(app)
   analyticsRoutes(app)
-  webRoutes(app)
+  webRoutes(app, deps.config.webDistDir)
 
   app.doc31('/openapi.json', openApiInfo)
 
