@@ -1,4 +1,6 @@
 import { render } from 'preact'
+import { App } from './app'
+import './styles.css'
 
 const root = document.getElementById('app')
-if (root) render(<p>Freiraum</p>, root)
+if (root) render(<App />, root)
