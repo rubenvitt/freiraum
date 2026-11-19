@@ -3286,6 +3286,88 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /v1/households/{householdId}/budget/{month}/moves:
+    post:
+      tags:
+        - Budget
+      summary: Geld umschichten, in einem Schritt
+      description: "Senkt die Zuweisung der Quelle und erhöht die des Ziels um denselben Betrag, beides in einer Transaktion: Wird abgelehnt, ändert sich nichts. Fehlt `fromPotId` oder ist es null, kommt das Geld aus „Noch ohne Aufgabe“; dann gilt wie beim Erhöhen, dass „Noch ohne Aufgabe“ nicht negativ werden darf. Zwischen Töpfen bleibt „Noch ohne Aufgabe“ unverändert."
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: householdId
+          in: path
+        - schema:
+            type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+            example: 2026-11
+          required: true
+          name: month
+          in: path
+      requestBody:
+        description: Umschichtung
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                fromPotId:
+                  type:
+                    - string
+                    - "null"
+                  format: uuid
+                  description: Quelle; fehlt oder null = aus „Noch ohne Aufgabe“
+                toPotId:
+                  type: string
+                  format: uuid
+                amountCents:
+                  type: integer
+                  minimum: 1
+                  maximum: 100000000000
+              required:
+                - toPotId
+                - amountCents
+      responses:
+        "200":
+          description: Budget des Monats nach dem Umschichten
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BudgetMonth"
+        "400":
+          description: Ungültige Anfrage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Nicht angemeldet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Haushalt oder Topf nicht gefunden (oder kein Zugriff)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Monat abgeschlossen oder vor dem Budgetbeginn
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Nicht genug Geld ohne Aufgabe, Ziel archiviert, oder Quelle gleich Ziel
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/households/{householdId}/budget/{month}/erst-ich:
     post:
       tags:

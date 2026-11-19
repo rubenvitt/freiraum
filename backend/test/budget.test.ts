@@ -432,6 +432,154 @@ describe('Zuweisungen und „Noch ohne Aufgabe“', () => {
   })
 })
 
+const moveMoney = (token: string, householdId: string, m: string, input: Json) =>
+  request('POST', `/v1/households/${householdId}/budget/${m}/moves`, input, token)
+
+const assignedOf = (view: Json, pot: string) =>
+  view.pots.find((p: Json) => p.potId === pot)?.assignedCents as number
+
+describe('Umschichten', () => {
+  it('schichtet zwischen Töpfen und aus „Noch ohne Aufgabe“ in einem Schritt um', async () => {
+    const a = await setup()
+    await salaryRule(a.token, a.householdId)
+    await importInto(a.token, a.accountId, [salary(current, 100_000)])
+    const essen = await potId(a.token, a.householdId, { name: 'Essen', kind: 'monatlich' })
+    const strom = await potId(a.token, a.householdId, { name: 'Strom', kind: 'monatlich' })
+    await assign(a.token, a.householdId, current, essen, 40_000)
+
+    const between = await moveMoney(a.token, a.householdId, current, {
+      fromPotId: essen,
+      toPotId: strom,
+      amountCents: 3_000,
+    })
+    expect(between.status).toBe(200)
+    const after = await body(between)
+    expect(assignedOf(after, essen)).toBe(37_000)
+    expect(assignedOf(after, strom)).toBe(3_000)
+    expect(after.readyToAssignCents).toBe(60_000)
+
+    const fromReady = await body(
+      await moveMoney(a.token, a.householdId, current, {
+        toPotId: strom,
+        amountCents: 60_000,
+      }),
+    )
+    expect(assignedOf(fromReady, strom)).toBe(63_000)
+    expect(fromReady.readyToAssignCents).toBe(0)
+  })
+
+  it('ändert nichts, wenn „Noch ohne Aufgabe“ nicht reicht', async () => {
+    const a = await setup()
+    await salaryRule(a.token, a.householdId)
+    await importInto(a.token, a.accountId, [salary(current, 10_000)])
+    const strom = await potId(a.token, a.householdId, { name: 'Strom', kind: 'monatlich' })
+    const before = await body(await month(a.token, a.householdId, current))
+
+    const res = await moveMoney(a.token, a.householdId, current, {
+      fromPotId: null,
+      toPotId: strom,
+      amountCents: 10_001,
+    })
+    expect(res.status).toBe(422)
+    expect((await body(res)).error.code).toBe('noch_ohne_aufgabe_negativ')
+    expect(await body(await month(a.token, a.householdId, current))).toEqual(before)
+    const rows = await db`select 1 from pot_assignments where pot_id = ${strom}`
+    expect(rows).toHaveLength(0)
+  })
+
+  it('erlaubt Umschichten zwischen Töpfen, auch wenn „Noch ohne Aufgabe“ schon negativ ist', async () => {
+    const a = await setup()
+    await salaryRule(a.token, a.householdId)
+    const essen = await potId(a.token, a.householdId, { name: 'Essen', kind: 'monatlich' })
+    const strom = await potId(a.token, a.householdId, { name: 'Strom', kind: 'monatlich' })
+    await importInto(a.token, a.accountId, [salary(previous, 50_000)])
+    await assign(a.token, a.householdId, previous, essen, 30_000)
+    await assign(a.token, a.householdId, current, essen, 20_000)
+    // Später zugeordnete Ausgabe im Vormonat überzieht „Essen“: „Noch ohne Aufgabe“ wird negativ.
+    await importInto(a.token, a.accountId, [
+      { bookingDate: `${previous}-10`, amountCents: -40_000, counterpartyName: 'Markt Beispiel' },
+    ])
+    const pending = await body(await request('GET', '/v1/transactions/pending', undefined, a.token))
+    const purchase = pending.items.find((t: Json) => t.amountCents === -40_000)
+    await request(
+      'PUT',
+      `/v1/transactions/${purchase.id}/splits`,
+      { splits: [{ kind: 'topf', potId: essen, amountCents: -40_000 }] },
+      a.token,
+    )
+    expect((await body(await month(a.token, a.householdId, current))).readyToAssignCents).toBe(
+      -10_000,
+    )
+
+    const res = await moveMoney(a.token, a.householdId, current, {
+      fromPotId: essen,
+      toPotId: strom,
+      amountCents: 5_000,
+    })
+    expect(res.status).toBe(200)
+    const after = await body(res)
+    expect(after.readyToAssignCents).toBe(-10_000)
+    expect(assignedOf(after, strom)).toBe(5_000)
+  })
+
+  it('lehnt im abgeschlossenen Monat ab und ändert nichts', async () => {
+    const a = await setup()
+    await startAt(a.token, a.householdId, previous)
+    await salaryRule(a.token, a.householdId)
+    await importInto(a.token, a.accountId, [salary(previous)])
+    const pending = await body(await request('GET', '/v1/transactions/pending', undefined, a.token))
+    for (const t of pending.items) {
+      await request('POST', `/v1/transactions/${t.id}/confirm`, undefined, a.token)
+    }
+    const essen = await potId(a.token, a.householdId, { name: 'Essen', kind: 'monatlich' })
+    const strom = await potId(a.token, a.householdId, { name: 'Strom', kind: 'monatlich' })
+    await assign(a.token, a.householdId, previous, essen, 10_000)
+    const closed = await request(
+      'POST',
+      `/v1/households/${a.householdId}/budget/${previous}/closing`,
+      undefined,
+      a.token,
+    )
+    expect(closed.status).toBe(201)
+
+    const res = await moveMoney(a.token, a.householdId, previous, {
+      fromPotId: essen,
+      toPotId: strom,
+      amountCents: 1_000,
+    })
+    expect(res.status).toBe(409)
+    expect((await body(res)).error.code).toBe('monat_abgeschlossen')
+    const view = await body(await month(a.token, a.householdId, previous))
+    expect(assignedOf(view, essen)).toBe(10_000)
+    expect(assignedOf(view, strom)).toBe(0)
+  })
+
+  it('prüft Töpfe, Ziel und Betrag', async () => {
+    const a = await setup()
+    const b = await setup('Person B')
+    await salaryRule(a.token, a.householdId)
+    await importInto(a.token, a.accountId, [salary(current, 10_000)])
+    const essen = await potId(a.token, a.householdId, { name: 'Essen', kind: 'monatlich' })
+    const fremd = await potId(b.token, b.householdId, { name: 'Fremd', kind: 'monatlich' })
+    const alt = await potId(a.token, a.householdId, { name: 'Alt', kind: 'monatlich' })
+    await request('PATCH', `/v1/pots/${alt}`, { archived: true }, a.token)
+
+    const go = (input: Json) => moveMoney(a.token, a.householdId, current, input)
+    const same = await go({ fromPotId: essen, toPotId: essen, amountCents: 100 })
+    expect(same.status).toBe(422)
+    expect((await body(same)).error.code).toBe('gleicher_topf')
+    expect((await go({ fromPotId: null, toPotId: fremd, amountCents: 100 })).status).toBe(404)
+    expect((await go({ fromPotId: fremd, toPotId: essen, amountCents: 100 })).status).toBe(404)
+    const archived = await go({ fromPotId: null, toPotId: alt, amountCents: 100 })
+    expect(archived.status).toBe(422)
+    expect((await body(archived)).error.code).toBe('topf_archiviert')
+    expect((await go({ fromPotId: null, toPotId: essen, amountCents: 0 })).status).toBe(400)
+    expect((await go({ fromPotId: 'kein-topf', toPotId: essen, amountCents: 100 })).status).toBe(
+      400,
+    )
+  })
+})
+
 describe('Erst-ich-Automatik', () => {
   it('füllt Erst-ich-Töpfe nach dem Gehaltseingang', async () => {
     const a = await setup()

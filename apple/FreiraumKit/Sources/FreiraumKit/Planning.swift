@@ -162,17 +162,18 @@ public enum MoveMoney {
         case pot(String)
     }
 
-    /// Neue Zuweisung eines Topfs (Betrag, nicht Änderung), wie `PUT …/pots/{potId}` sie nimmt.
-    public struct Step: Hashable, Sendable {
-        public let potId: String
-        public let assignedCents: Int
-        /// Zuweisung vorher, zum Zurücknehmen, falls ein späterer Schritt scheitert
-        public let previousCents: Int
+    /// Eine Umschichtung, wie `POST …/budget/{Monat}/moves` sie nimmt. Der Server senkt die
+    /// Quelle und erhöht das Ziel in einer Transaktion: Lehnt er ab, ändert sich nichts.
+    public struct Request: Hashable, Sendable {
+        /// nil = aus „Noch ohne Aufgabe“
+        public let fromPotId: String?
+        public let toPotId: String
+        public let amountCents: Int
 
-        public init(potId: String, assignedCents: Int, previousCents: Int) {
-            self.potId = potId
-            self.assignedCents = assignedCents
-            self.previousCents = previousCents
+        public init(fromPotId: String?, toPotId: String, amountCents: Int) {
+            self.fromPotId = fromPotId
+            self.toPotId = toPotId
+            self.amountCents = amountCents
         }
     }
 
@@ -195,26 +196,23 @@ public enum MoveMoney {
         }
     }
 
-    /// Schritte fürs Umschichten: erst die Quelle senken (geht immer), dann das Ziel erhöhen.
-    /// So wird „Noch ohne Aufgabe“ zwischendurch nie negativ. Aus „Noch ohne Aufgabe“ prüft
+    /// Umschichtung prüfen, soweit die App es aus dem Budget sieht. Aus „Noch ohne Aufgabe“ prüft
     /// erst der Server, ob genug da ist, und liefert sonst seine Meldung.
-    public static func steps(
+    public static func request(
         in budget: BudgetMonth, from source: Source, to targetId: String, amountCents: Int
-    ) throws(Problem) -> [Step] {
+    ) throws(Problem) -> Request {
         guard amountCents > 0 else { throw .amountNotPositive }
         guard !budget.closed else { throw .monthClosed }
         guard let target = budget.pots.first(where: { $0.potId == targetId }), !target.archived else { throw .unknownPot }
-        var steps: [Step] = []
-        if case let .pot(sourceId) = source {
-            guard sourceId != targetId else { throw .sameSourceAndTarget }
-            guard let from = budget.pots.first(where: { $0.potId == sourceId }) else { throw .unknownPot }
-            guard from.availableCents >= amountCents else {
-                throw .notEnoughInPot(name: from.name, availableCents: from.availableCents)
-            }
-            steps.append(Step(potId: sourceId, assignedCents: from.assignedCents - amountCents, previousCents: from.assignedCents))
+        guard case let .pot(sourceId) = source else {
+            return Request(fromPotId: nil, toPotId: target.potId, amountCents: amountCents)
         }
-        steps.append(Step(potId: targetId, assignedCents: target.assignedCents + amountCents, previousCents: target.assignedCents))
-        return steps
+        guard sourceId != targetId else { throw .sameSourceAndTarget }
+        guard let from = budget.pots.first(where: { $0.potId == sourceId }) else { throw .unknownPot }
+        guard from.availableCents >= amountCents else {
+            throw .notEnoughInPot(name: from.name, availableCents: from.availableCents)
+        }
+        return Request(fromPotId: sourceId, toPotId: target.potId, amountCents: amountCents)
     }
 }
 
@@ -256,23 +254,16 @@ extension FreiraumService {
         }
     }
 
-    /// Umschichten ausführen. Scheitert ein späterer Schritt (etwa 422, weil „Noch ohne Aufgabe“
-    /// nicht reicht), werden die früheren zurückgenommen, und der Fehler des Servers kommt durch.
-    /// Liefert das Budget nach dem letzten Schritt.
-    public func move(householdId: String, month: YearMonth, steps: [MoveMoney.Step]) async throws(APIError) -> BudgetMonth? {
-        var done: [MoveMoney.Step] = []
-        var last: BudgetMonth?
-        for step in steps {
-            do {
-                last = try await setAssignment(householdId: householdId, month: month, potId: step.potId, assignedCents: step.assignedCents)
-                done.append(step)
-            } catch {
-                for undo in done.reversed() {
-                    _ = try? await setAssignment(householdId: householdId, month: month, potId: undo.potId, assignedCents: undo.previousCents)
-                }
-                throw error
-            }
+    /// Umschichten in einem Schritt. Lehnt der Server ab (etwa 422, weil „Noch ohne Aufgabe“
+    /// nicht reicht), ändert sich nichts, und sein Fehler kommt durch.
+    public func move(householdId: String, month: YearMonth, _ move: MoveMoney.Request) async throws(APIError) -> BudgetMonth {
+        try await call {
+            let out = try await client.postV1HouseholdsHouseholdIdBudgetMonthMoves(
+                path: .init(householdId: householdId, month: month.description),
+                body: .json(.init(fromPotId: move.fromPotId, toPotId: move.toPotId, amountCents: move.amountCents))
+            )
+            guard case let .ok(ok) = out else { throw unexpected(out) }
+            return try BudgetMonth(try ok.body.json)
         }
-        return last
     }
 }

@@ -78,35 +78,32 @@ private let pots = [
 }
 
 @Suite struct MoveMoneyTests {
-    @Test func zwischenToepfenErstSenkenDannErhoehen() throws {
-        let steps = try MoveMoney.steps(in: budget(), from: .pot("essen"), to: "strom", amountCents: 3_000)
-        #expect(steps == [
-            MoveMoney.Step(potId: "essen", assignedCents: 37_000, previousCents: 40_000),
-            MoveMoney.Step(potId: "strom", assignedCents: 8_000, previousCents: 5_000),
-        ])
+    @Test func zwischenToepfen() throws {
+        let request = try MoveMoney.request(in: budget(), from: .pot("essen"), to: "strom", amountCents: 3_000)
+        #expect(request == MoveMoney.Request(fromPotId: "essen", toPotId: "strom", amountCents: 3_000))
     }
 
     @Test func ausNochOhneAufgabePrueftDerServer() throws {
         // Mehr als „Noch ohne Aufgabe“: die App lässt es zu, der Server antwortet mit seiner Meldung.
-        let steps = try MoveMoney.steps(in: budget(ready: 1_000), from: .readyToAssign, to: "strom", amountCents: 5_000)
-        #expect(steps == [MoveMoney.Step(potId: "strom", assignedCents: 10_000, previousCents: 5_000)])
+        let request = try MoveMoney.request(in: budget(ready: 1_000), from: .readyToAssign, to: "strom", amountCents: 5_000)
+        #expect(request == MoveMoney.Request(fromPotId: nil, toPotId: "strom", amountCents: 5_000))
     }
 
     @Test func ungueltigeEingaben() {
         #expect(throws: MoveMoney.Problem.amountNotPositive) {
-            try MoveMoney.steps(in: budget(), from: .readyToAssign, to: "strom", amountCents: 0)
+            try MoveMoney.request(in: budget(), from: .readyToAssign, to: "strom", amountCents: 0)
         }
         #expect(throws: MoveMoney.Problem.sameSourceAndTarget) {
-            try MoveMoney.steps(in: budget(), from: .pot("strom"), to: "strom", amountCents: 100)
+            try MoveMoney.request(in: budget(), from: .pot("strom"), to: "strom", amountCents: 100)
         }
         #expect(throws: MoveMoney.Problem.unknownPot) {
-            try MoveMoney.steps(in: budget(), from: .readyToAssign, to: "alt", amountCents: 100)
+            try MoveMoney.request(in: budget(), from: .readyToAssign, to: "alt", amountCents: 100)
         }
         #expect(throws: MoveMoney.Problem.monthClosed) {
-            try MoveMoney.steps(in: budget(closed: true), from: .readyToAssign, to: "strom", amountCents: 100)
+            try MoveMoney.request(in: budget(closed: true), from: .readyToAssign, to: "strom", amountCents: 100)
         }
         #expect(throws: MoveMoney.Problem.notEnoughInPot(name: "Essen", availableCents: 15_000)) {
-            try MoveMoney.steps(in: budget(), from: .pot("essen"), to: "strom", amountCents: 20_000)
+            try MoveMoney.request(in: budget(), from: .pot("essen"), to: "strom", amountCents: 20_000)
         }
         #expect(MoveMoney.Problem.notEnoughInPot(name: "Essen", availableCents: 15_000).description
             == "In „Essen“ sind nur 150\u{00A0}€ verfügbar.")
@@ -124,26 +121,30 @@ private let budgetJSON = """
         FreiraumService(baseURL: URL(string: "https://freiraum.test")!, token: { "frs_test" }, transport: transport)
     }
 
-    @Test func umschichtenNimmtBeiFehlerZurueck() async throws {
-        let transport = FakeTransport { path in
-            if path.hasSuffix("/pots/strom") {
-                return (422, #"{"error":{"code":"nicht_genug","message":"Nicht genug Geld ohne Aufgabe."}}"#)
-            }
-            return (200, budgetJSON)
+    @Test func umschichtenInEinemSchritt() async throws {
+        let transport = FakeTransport { _ in (200, budgetJSON) }
+        let move = MoveMoney.Request(fromPotId: "essen", toPotId: "strom", amountCents: 3_000)
+        _ = try await service(transport).move(householdId: "h1", month: nov, move)
+        #expect(transport.requests.count == 1)
+        let sent = try #require(transport.requests.first)
+        #expect(sent.method == .post)
+        #expect(sent.path == "/v1/households/h1/budget/2026-11/moves")
+        #expect(sent.body?["fromPotId"] as? String == "essen")
+        #expect(sent.body?["toPotId"] as? String == "strom")
+        #expect(sent.body?["amountCents"] as? Int == 3_000)
+    }
+
+    @Test func umschichtenAusNochOhneAufgabeMeldetDenServer() async throws {
+        let transport = FakeTransport { _ in
+            (422, #"{"error":{"code":"noch_ohne_aufgabe_negativ","message":"Nicht genug Geld ohne Aufgabe."}}"#)
         }
-        let steps = [
-            MoveMoney.Step(potId: "essen", assignedCents: 37_000, previousCents: 40_000),
-            MoveMoney.Step(potId: "strom", assignedCents: 8_000, previousCents: 5_000),
-        ]
-        await #expect(throws: APIError.server(status: 422, code: "nicht_genug", message: "Nicht genug Geld ohne Aufgabe.")) {
-            _ = try await service(transport).move(householdId: "h1", month: nov, steps: steps)
+        let move = MoveMoney.Request(fromPotId: nil, toPotId: "strom", amountCents: 5_000)
+        await #expect(throws: APIError.server(status: 422, code: "noch_ohne_aufgabe_negativ", message: "Nicht genug Geld ohne Aufgabe.")) {
+            _ = try await service(transport).move(householdId: "h1", month: nov, move)
         }
-        let calls = transport.requests.map { "\($0.path) \($0.body?["assignedCents"] as? Int ?? -1)" }
-        #expect(calls == [
-            "/v1/households/h1/budget/2026-11/pots/essen 37000",
-            "/v1/households/h1/budget/2026-11/pots/strom 8000",
-            "/v1/households/h1/budget/2026-11/pots/essen 40000",
-        ])
+        // Ein Aufruf, keine Rücknahme: Der Server hat nichts geändert.
+        #expect(transport.requests.count == 1)
+        #expect(transport.requests.first?.body?["fromPotId"] as? String == nil)
     }
 
     @Test func abschliessenUndOeffnen() async throws {

@@ -747,14 +747,14 @@ final class AppModel {
     /// nimmt der Dienst das Senken zurück. Liefert nil bei Erfolg, sonst die Meldung.
     func move(householdId: String, from source: MoveMoney.Source, to potId: String, cents: Int) async -> String? {
         guard let budget = budgets[householdId] else { return "Das Budget ist noch nicht geladen." }
-        let steps: [MoveMoney.Step]
+        let request: MoveMoney.Request
         do {
-            steps = try MoveMoney.steps(in: budget, from: source, to: potId, amountCents: cents)
+            request = try MoveMoney.request(in: budget, from: source, to: potId, amountCents: cents)
         } catch {
             return (error as? MoveMoney.Problem)?.description ?? String(describing: error)
         }
         return await changeBudget(householdId: householdId) { service, month in
-            _ = try await service.move(householdId: householdId, month: month, steps: steps)
+            _ = try await service.move(householdId: householdId, month: month, request)
         }
     }
 

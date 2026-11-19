@@ -323,6 +323,41 @@ const setAssignment = createRoute({
   },
 })
 
+const moveMoney = createRoute({
+  method: 'post',
+  path: '/v1/households/{householdId}/budget/{month}/moves',
+  tags: ['Budget'],
+  summary: 'Geld umschichten, in einem Schritt',
+  description:
+    'Senkt die Zuweisung der Quelle und erhöht die des Ziels um denselben Betrag, beides in ' +
+    'einer Transaktion: Wird abgelehnt, ändert sich nichts. Fehlt `fromPotId` oder ist es null, ' +
+    'kommt das Geld aus „Noch ohne Aufgabe“; dann gilt wie beim Erhöhen, dass „Noch ohne Aufgabe“ nicht ' +
+    'negativ werden darf. Zwischen Töpfen bleibt „Noch ohne Aufgabe“ unverändert.',
+  security: [{ bearerAuth: [] }],
+  middleware: [requireAuth] as const,
+  request: {
+    params: monthParams,
+    body: json(
+      z.object({
+        fromPotId: z.uuid().nullable().optional().openapi({
+          description: 'Quelle; fehlt oder null = aus „Noch ohne Aufgabe“',
+        }),
+        toPotId: z.uuid(),
+        amountCents: PositiveCents,
+      }),
+      'Umschichtung',
+    ),
+  },
+  responses: {
+    200: json(BudgetMonthSchema, 'Budget des Monats nach dem Umschichten'),
+    400: error('Ungültige Anfrage'),
+    401: error('Nicht angemeldet'),
+    404: error('Haushalt oder Topf nicht gefunden (oder kein Zugriff)'),
+    409: error('Monat abgeschlossen oder vor dem Budgetbeginn'),
+    422: error('Nicht genug Geld ohne Aufgabe, Ziel archiviert, oder Quelle gleich Ziel'),
+  },
+})
+
 const fillErstIch = createRoute({
   method: 'post',
   path: '/v1/households/{householdId}/budget/{month}/erst-ich',
@@ -523,6 +558,17 @@ export function budgetRoutes(app: OpenAPIHono<AppEnv>): void {
       month,
       potId,
       c.req.valid('json').assignedCents,
+    )
+    return c.json(monthJson(view), 200)
+  })
+
+  app.openapi(moveMoney, async (c) => {
+    const { householdId, month } = c.req.valid('param')
+    const view = await c.var.budget.moveMoney(
+      c.var.session.person.id,
+      householdId,
+      month,
+      c.req.valid('json'),
     )
     return c.json(monthJson(view), 200)
   })

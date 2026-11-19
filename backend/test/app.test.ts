@@ -58,6 +58,7 @@ describe('OpenAPI-Vertrag', () => {
       '/v1/households/{householdId}/budget/{month}',
       '/v1/households/{householdId}/budget/{month}/closing',
       '/v1/households/{householdId}/budget/{month}/erst-ich',
+      '/v1/households/{householdId}/budget/{month}/moves',
       '/v1/households/{householdId}/budget/{month}/pots/{potId}',
       '/v1/households/{householdId}/contribution-rules',
       '/v1/households/{householdId}/contribution-rules/{month}',
