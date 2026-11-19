@@ -14,12 +14,16 @@ configFiles:
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "0.1.0"
+    MARKETING_VERSION: "0.1"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_STRICT_CONCURRENCY: complete
 packages:
   FreiraumKit:
     path: FreiraumKit
+  # Automatische Updates der Mac-App (nur macOS gelinkt, siehe Abhängigkeit am Ziel Freiraum).
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.6.0
 targets:
   Freiraum:
     type: application
@@ -29,6 +33,8 @@ targets:
       - Freiraum
     dependencies:
       - package: FreiraumKit
+      - package: Sparkle
+        destinationFilters: [macOS]
       - target: FreiraumWidget
         destinationFilters: [iOS]
     settings:
@@ -45,6 +51,8 @@ targets:
       path: Freiraum/Info.plist
       properties:
         CFBundleDisplayName: Freiraum
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.finance
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
@@ -52,6 +60,14 @@ targets:
         BGTaskSchedulerPermittedIdentifiers: [$(PRODUCT_BUNDLE_IDENTIFIER).refresh]
         FreiraumDomain: $(FREIRAUM_DOMAIN)
         FreiraumAppGroup: group.$(FREIRAUM_BUNDLE_PREFIX).freiraum
+        # Sparkle (nur macOS ausgewertet). Feed und Schlüssel setzt der Release-Build über
+        # Local.xcconfig; leer bleibt die Update-Prüfung aus (Updater.swift).
+        SUFeedURL: $(FREIRAUM_UPDATE_FEED)
+        SUPublicEDKey: $(FREIRAUM_SPARKLE_PUBLIC_KEY)
+        SUEnableAutomaticChecks: true
+        SUAutomaticallyUpdate: true
+        SUScheduledCheckInterval: 3600
+        SUEnableInstallerLauncherService: true
   FreiraumWidget:
     type: app-extension
     platform: iOS
@@ -69,6 +85,8 @@ targets:
       path: FreiraumWidget/Info.plist
       properties:
         CFBundleDisplayName: Freiraum
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
         FreiraumAppGroup: group.$(FREIRAUM_BUNDLE_PREFIX).freiraum

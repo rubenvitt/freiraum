@@ -21,9 +21,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>FreiraumAppGroup</key>
 	<string>group.$(FREIRAUM_BUNDLE_PREFIX).freiraum</string>
 	<key>FreiraumDomain</key>
@@ -32,6 +32,18 @@
 	<false/>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.finance</string>
+	<key>SUAutomaticallyUpdate</key>
+	<true/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUEnableInstallerLauncherService</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>$(FREIRAUM_UPDATE_FEED)</string>
+	<key>SUPublicEDKey</key>
+	<string>$(FREIRAUM_SPARKLE_PUBLIC_KEY)</string>
+	<key>SUScheduledCheckInterval</key>
+	<integer>3600</integer>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>

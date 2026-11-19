@@ -6,6 +6,13 @@ struct FreiraumApp: App {
     @State private var model = AppModel()
     @Environment(\.scenePhase) private var scenePhase
 
+    #if os(macOS) && canImport(Sparkle)
+    init() {
+        // Sparkle gleich beim Start anlegen, damit die automatische Prüfung läuft.
+        _ = Updater.shared
+    }
+    #endif
+
     var body: some Scene {
         #if os(macOS)
         // Am Mac ein Hauptfenster und die Menüleiste. Ohne Fenster läuft die App in der
@@ -17,6 +24,13 @@ struct FreiraumApp: App {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await model.load() } }
         }
+        #if canImport(Sparkle)
+        .commands {
+            CommandGroup(after: .appInfo) {
+                CheckForUpdatesCommand()
+            }
+        }
+        #endif
 
         MenuBarExtra {
             MenuBarContent()
@@ -53,6 +67,20 @@ struct FreiraumApp: App {
             .tint(Theme.accent)
     }
 }
+
+#if os(macOS) && canImport(Sparkle)
+/// Menüpunkt „Nach Updates suchen …“ im App-Menü; fehlt ohne Update-Feed.
+struct CheckForUpdatesCommand: View {
+    private var updater: Updater { .shared }
+
+    var body: some View {
+        if updater.isAvailable {
+            Button("Nach Updates suchen …") { updater.checkForUpdates() }
+                .disabled(!updater.canCheck)
+        }
+    }
+}
+#endif
 
 struct RootView: View {
     @Environment(AppModel.self) private var model

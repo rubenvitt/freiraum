@@ -1,0 +1,372 @@
+# Mac-App: signiertes, notarisiertes DMG als GitHub-Release mit Sparkle-Appcast.
+#
+# WICHTIG: Dieser Workflow markiert seinen Release als „latest“ (--latest). Installierte Apps
+# lesen ihren Update-Feed über releases/latest/download/appcast.xml. Andere Releases in diesem
+# Repo mit --latest=false anlegen (gh release create … --latest=false), sonst finden installierte
+# Apps keine Updates mehr. Siehe ADR 0007.
+#
+# Ohne Signatur-Secrets endet der Release-Job mit Warnung und ohne Release (grün). Fehlt nur ein
+# Teil der Secrets oder Variablen, schlägt er fehl (apple/scripts/release-env.sh check).
+# Einrichtung: apple/RELEASE.md.
+
+name: Mac-Release
+
+on:
+  push:
+    branches: [main]
+    paths: ['apple/**', '!apple/*.md', '!apple/**/*.md', 'openapi/**', '.github/workflows/mac-release.yml']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Nur bauen, signieren und notarisieren; DMG als Artefakt, kein Release'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Ohne grüne Tests kein Release: FreiraumKit wie im Apple-Workflow, dazu die Release-Skripte.
+  kit:
+    name: FreiraumKit und Release-Skripte (Linux)
+    runs-on: ubuntu-latest
+    container: swift:6.1-noble
+    steps:
+      - uses: actions/checkout@v4
+      - name: swift test
+        working-directory: apple/FreiraumKit
+        run: swift test
+      - name: xmllint für den Appcast-Test
+        run: apt-get update && apt-get install -y --no-install-recommends libxml2-utils
+      - run: bash apple/scripts/test-appcast.sh
+      - run: bash apple/scripts/test-release-env.sh
+
+  release:
+    name: Signieren, notarisieren, veröffentlichen (macOS)
+    needs: kit
+    runs-on: macos-26
+    timeout-minutes: 90
+    concurrency:
+      group: mac-release
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: apple
+    env:
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      FREIRAUM_BUNDLE_PREFIX: ${{ vars.FREIRAUM_BUNDLE_PREFIX }}
+      FREIRAUM_DOMAIN: ${{ vars.FREIRAUM_DOMAIN }}
+      SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Feste Pfade für alle Schritte: Schlüsselbund, Archiv, Export und DerivedData (dort liegt
+      # unter SourcePackages/artifacts das SPM-Artefakt mit Sparkles sign_update).
+      - name: Pfade festlegen
+        run: |
+          {
+            echo "KEYCHAIN=$RUNNER_TEMP/freiraum-release.keychain-db"
+            echo "GEHEIM=$RUNNER_TEMP/geheim"
+            echo "DERIVED_DATA=$RUNNER_TEMP/DerivedData"
+            echo "ARCHIVE=$RUNNER_TEMP/Freiraum.xcarchive"
+            echo "EXPORT=$RUNNER_TEMP/export"
+            echo "AUSGABE=$RUNNER_TEMP/ausgabe"
+          } >> "$GITHUB_ENV"
+
+      # Secrets nur als Umgebung dieses und der Schritte, die sie brauchen; der Build selbst
+      # (Paket-Plugins!) sieht sie nicht.
+      - name: Secrets und Variablen prüfen
+        id: check
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_PROVISIONING_PROFILE: ${{ secrets.MACOS_PROVISIONING_PROFILE }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: bash scripts/release-env.sh check
+
+      # Version und ob veröffentlicht wird. Release nur auf main, bei Push oder bei manuellem
+      # Start ohne dry_run; sonst landen DMG und Appcast als Artefakt.
+      - name: Version und Ziel festlegen
+        id: plan
+        if: steps.check.outputs.enabled == 'true'
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+          VEROEFFENTLICHEN: >-
+            ${{ github.ref == 'refs/heads/main'
+            && (github.event_name == 'push' || inputs.dry_run == false) }}
+        run: |
+          version="$(bash scripts/release-env.sh version project.yml "$RUN_NUMBER")"
+          {
+            echo "version=$version"
+            echo "build=$RUN_NUMBER"
+            echo "release=$VEROEFFENTLICHEN"
+          } >> "$GITHUB_OUTPUT"
+          echo "Version $version (Build $RUN_NUMBER), Release: $VEROEFFENTLICHEN"
+
+      - name: Zertifikat und Provisioning-Profil installieren
+        if: steps.check.outputs.enabled == 'true'
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_PROVISIONING_PROFILE: ${{ secrets.MACOS_PROVISIONING_PROFILE }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$GEHEIM"
+          chmod 700 "$GEHEIM"
+
+          # Temporärer Schlüsselbund mit Zufallspasswort, nur für diesen Lauf.
+          kc_pw="$(openssl rand -base64 32)"
+          echo "::add-mask::$kc_pw"
+          security create-keychain -p "$kc_pw" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$kc_pw" "$KEYCHAIN"
+
+          printf '%s' "$MACOS_CERTIFICATE_P12" | base64 --decode > "$GEHEIM/zertifikat.p12"
+          security import "$GEHEIM/zertifikat.p12" -k "$KEYCHAIN" -f pkcs12 \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$GEHEIM/zertifikat.p12"
+          # Zwischenzertifikat „Developer ID G2“, falls das P12 die Kette nicht enthält.
+          if curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer \
+               -o "$GEHEIM/DeveloperIDG2CA.cer"; then
+            security import "$GEHEIM/DeveloperIDG2CA.cer" -k "$KEYCHAIN" || true
+          fi
+          # codesign ohne Rückfrage auf den Schlüssel zugreifen lassen.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
+            -k "$kc_pw" "$KEYCHAIN" > /dev/null
+          # Schlüsselbund in die Suchliste aufnehmen (vorhandene behalten).
+          alte="$(security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//')"
+          # shellcheck disable=SC2086 # Liste absichtlich wortweise
+          security list-keychains -d user -s "$KEYCHAIN" $alte
+          if ! security find-identity -v -p codesigning "$KEYCHAIN" | grep -q 'Developer ID Application'; then
+            echo "::error::Keine gültige Identität (Developer ID Application) im Zertifikat."
+            exit 1
+          fi
+
+          # Profil: UUID (für xcconfig und Export) aus dem signierten Inhalt. Nichts davon ins
+          # (öffentliche) Protokoll schreiben.
+          printf '%s' "$MACOS_PROVISIONING_PROFILE" | base64 --decode > "$GEHEIM/profil.provisionprofile"
+          security cms -D -i "$GEHEIM/profil.provisionprofile" > "$GEHEIM/profil.plist"
+          uuid="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$GEHEIM/profil.plist")"
+          # UUID vor dem Kopieren festhalten, damit das Aufräumen das Profil auch nach einem Fehler findet.
+          echo "PROFIL_UUID=$uuid" >> "$GITHUB_ENV"
+          # Klassischer Ort und der seit Xcode 16 genutzte; je nach Xcode-Version liest es den einen
+          # oder anderen.
+          for ziel in "$HOME/Library/MobileDevice/Provisioning Profiles" \
+                      "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
+            mkdir -p "$ziel"
+            cp "$GEHEIM/profil.provisionprofile" "$ziel/$uuid.provisionprofile"
+          done
+
+      # Local.xcconfig aus Variablen. In .xcconfig beginnt „//“ einen Kommentar, deshalb wird jedes
+      # „//“ (URL, Base64-Schlüssel) als „/$()/“ geschrieben; $() ist leer.
+      - name: Local.xcconfig schreiben
+        if: steps.check.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2016 # $() ist hier wörtlich gemeint
+          xc() { printf '%s' "$1" | sed -e ':a' -e 's#//#/$()/#' -e 'ta'; }
+          feed="https://github.com/$GITHUB_REPOSITORY/releases/latest/download/appcast.xml"
+          cat > Config/Local.xcconfig <<EOF
+          // Von .github/workflows/mac-release.yml erzeugt.
+          DEVELOPMENT_TEAM = $(xc "$APPLE_TEAM_ID")
+          FREIRAUM_BUNDLE_PREFIX = $(xc "$FREIRAUM_BUNDLE_PREFIX")
+          FREIRAUM_DOMAIN = $(xc "$FREIRAUM_DOMAIN")
+          FREIRAUM_UPDATE_FEED = $(xc "$feed")
+          FREIRAUM_SPARKLE_PUBLIC_KEY = $(xc "$SPARKLE_PUBLIC_KEY")
+          CODE_SIGN_STYLE = Manual
+          CODE_SIGN_IDENTITY = Developer ID Application
+          // Nur die App wird für macOS gebaut (das Widget ist iOS-only, Swift-Pakete erben
+          // Projekt-xcconfigs nicht), daher reicht die projektweite Einstellung.
+          PROVISIONING_PROFILE_SPECIFIER = $(xc "$PROFIL_UUID")
+          OTHER_CODE_SIGN_FLAGS = --keychain $(xc "$KEYCHAIN")
+          EOF
+
+      - name: Projekt erzeugen
+        if: steps.check.outputs.enabled == 'true'
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      # CODE_SIGN_IDENTITY zusätzlich auf der Kommandozeile: XcodeGen legt für die App
+      # (platform auto, erstes Ziel iOS) auf Target-Ebene „iPhone Developer“ an, was die
+      # Projekt-xcconfig überstimmt. Das Profil bleibt in der xcconfig, weil es auf der
+      # Kommandozeile auch die Swift-Pakete träfe, die keine Profile unterstützen.
+      - name: Archivieren
+        if: steps.check.outputs.enabled == 'true'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+          BUILD: ${{ steps.plan.outputs.build }}
+        run: >-
+          xcodebuild archive -project Freiraum.xcodeproj -scheme Freiraum
+          -configuration Release
+          -destination 'generic/platform=macOS'
+          -archivePath "$ARCHIVE"
+          -derivedDataPath "$DERIVED_DATA"
+          -skipPackagePluginValidation -skipMacroValidation
+          MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD"
+          CODE_SIGN_IDENTITY="Developer ID Application"
+
+      # Der Export signiert die App samt Sparkles verschachtelten Helfern (Autoupdate,
+      # Updater.app, XPC-Dienste) neu mit Developer ID; ein manuelles Nachsignieren ist nicht nötig.
+      - name: Exportieren (Developer ID)
+        if: steps.check.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          optionen="$RUNNER_TEMP/ExportOptions.plist"
+          cp Config/ExportOptions.plist "$optionen"
+          # PlistBuddy statt plutil: die Bundle-ID enthält Punkte, die plutil als Pfad deuten würde.
+          # Profil per UUID (der Name kann Leerzeichen enthalten).
+          /usr/libexec/PlistBuddy -c "Set :teamID $APPLE_TEAM_ID" "$optionen"
+          /usr/libexec/PlistBuddy \
+            -c "Add :provisioningProfiles:$FREIRAUM_BUNDLE_PREFIX.freiraum string $PROFIL_UUID" \
+            "$optionen"
+          xcodebuild -exportArchive -archivePath "$ARCHIVE" -exportPath "$EXPORT" \
+            -exportOptionsPlist "$optionen"
+          codesign --verify --deep --strict --verbose=2 "$EXPORT/Freiraum.app"
+
+      - name: DMG bauen und signieren
+        if: steps.check.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          inhalt="$RUNNER_TEMP/dmg-inhalt"
+          rm -rf "$inhalt" "$AUSGABE"
+          mkdir -p "$inhalt" "$AUSGABE"
+          ditto "$EXPORT/Freiraum.app" "$inhalt/Freiraum.app"
+          ln -s /Applications "$inhalt/Applications"
+          # „Resource busy“ ist auf gehosteten Runnern ein bekannter Zufallsfehler: bis zu 3 Versuche.
+          for versuch in 1 2 3; do
+            if hdiutil create -volname Freiraum -srcfolder "$inhalt" -ov -format UDZO \
+                 "$AUSGABE/Freiraum.dmg"; then
+              break
+            fi
+            if [ "$versuch" = 3 ]; then
+              echo "::error::hdiutil create schlug dreimal fehl."
+              exit 1
+            fi
+            echo "::warning::hdiutil create fehlgeschlagen (Versuch $versuch), neuer Versuch in 5 s."
+            sleep 5
+          done
+          codesign --sign "Developer ID Application" --timestamp --keychain "$KEYCHAIN" \
+            "$AUSGABE/Freiraum.dmg"
+          codesign --verify --verbose=2 "$AUSGABE/Freiraum.dmg"
+
+      - name: Notarisieren und Ticket anheften
+        if: steps.check.outputs.enabled == 'true'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$GEHEIM"
+          schluessel="$GEHEIM/AuthKey_$ASC_KEY_ID.p8"
+          # Inhalt der .p8-Datei; Base64-kodiert geht auch.
+          case "$ASC_KEY_P8" in
+            -----BEGIN*) printf '%s\n' "$ASC_KEY_P8" > "$schluessel" ;;
+            *) printf '%s' "$ASC_KEY_P8" | base64 --decode > "$schluessel" ;;
+          esac
+          chmod 600 "$schluessel"
+          rc=0
+          xcrun notarytool submit "$AUSGABE/Freiraum.dmg" \
+            --key "$schluessel" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
+            --wait --timeout 1h --output-format json > "$RUNNER_TEMP/notary.json" || rc=$?
+          cat "$RUNNER_TEMP/notary.json" || true
+          status="$(plutil -extract status raw -o - "$RUNNER_TEMP/notary.json" 2>/dev/null || true)"
+          id="$(plutil -extract id raw -o - "$RUNNER_TEMP/notary.json" 2>/dev/null || true)"
+          status="${status:-unbekannt}"
+          if [ "$status" != "Accepted" ]; then
+            if [ -n "$id" ]; then
+              xcrun notarytool log "$id" \
+                --key "$schluessel" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
+            fi
+            echo "::error::Notarisierung fehlgeschlagen (Status: $status, notarytool-Exit $rc). Ausgabe und Protokoll stehen oben."
+            exit 1
+          fi
+          xcrun stapler staple "$AUSGABE/Freiraum.dmg"
+          xcrun stapler validate "$AUSGABE/Freiraum.dmg"
+          spctl --assess --type open --context context:primary-signature \
+            "$AUSGABE/Freiraum.dmg"
+
+      # EdDSA-Signatur fürs Update erst nach dem Anheften: Sparkle prüft die fertige Datei.
+      - name: Sparkle-Signatur und Appcast
+        if: steps.check.outputs.enabled == 'true'
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          VERSION: ${{ steps.plan.outputs.version }}
+          BUILD: ${{ steps.plan.outputs.build }}
+        run: |
+          set -euo pipefail
+          sign_update="$DERIVED_DATA/SourcePackages/artifacts/sparkle/Sparkle/bin/sign_update"
+          if [ ! -x "$sign_update" ]; then
+            echo "::error::sign_update nicht gefunden: $sign_update (Sparkle-Paket in project.yml?)"
+            exit 1
+          fi
+          mkdir -p "$GEHEIM"
+          # Schlüssel wie von „generate_keys -x“ exportiert (Base64-Zeichenkette).
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$GEHEIM/sparkle.key"
+          chmod 600 "$GEHEIM/sparkle.key"
+          # Ausgabe: sparkle:edSignature="…" length="…"
+          ausgabe="$("$sign_update" --ed-key-file "$GEHEIM/sparkle.key" "$AUSGABE/Freiraum.dmg")"
+          rm -f "$GEHEIM/sparkle.key"
+          signatur="$(printf '%s' "$ausgabe" | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p')"
+          laenge="$(printf '%s' "$ausgabe" | sed -n 's/.*length="\([0-9]*\)".*/\1/p')"
+          if [ -z "$signatur" ] || [ -z "$laenge" ]; then
+            echo "::error::Unerwartete Ausgabe von sign_update"
+            exit 1
+          fi
+          tag="macos-v$VERSION"
+          basis="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases"
+          bash scripts/appcast.sh --version "$VERSION" --build "$BUILD" \
+            --url "$basis/download/$tag/Freiraum.dmg" --length "$laenge" \
+            --signature "$signatur" --notes-url "$basis/tag/$tag" > "$AUSGABE/appcast.xml"
+          cat "$AUSGABE/appcast.xml"
+
+      - name: Artefakt hochladen (ohne Release)
+        if: steps.check.outputs.enabled == 'true' && steps.plan.outputs.release != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Freiraum-${{ steps.plan.outputs.version }}
+          path: |
+            ${{ env.AUSGABE }}/Freiraum.dmg
+            ${{ env.AUSGABE }}/appcast.xml
+          if-no-files-found: error
+
+      - name: Release anlegen
+        if: steps.check.outputs.enabled == 'true' && steps.plan.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "macos-v$VERSION" > /dev/null 2>&1; then
+            echo "::notice::Release macos-v$VERSION existiert schon (erneuter Lauf), Anlegen übersprungen."
+            exit 0
+          fi
+          gh release create "macos-v$VERSION" \
+            --title "Freiraum für Mac $VERSION" \
+            --target "$GITHUB_SHA" \
+            --generate-notes \
+            --latest \
+            "$AUSGABE/Freiraum.dmg" "$AUSGABE/appcast.xml"
+
+      - name: Aufräumen
+        if: always()
+        working-directory: ${{ runner.temp }}
+        run: |
+          if [ -n "${KEYCHAIN:-}" ] && [ -f "$KEYCHAIN" ]; then
+            security delete-keychain "$KEYCHAIN" || true
+          fi
+          if [ -n "${PROFIL_UUID:-}" ]; then
+            rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFIL_UUID.provisionprofile" \
+                  "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/$PROFIL_UUID.provisionprofile"
+          fi
+          if [ -n "${GEHEIM:-}" ]; then
+            rm -rf "$GEHEIM"
+          fi
+          rm -f "$RUNNER_TEMP/ExportOptions.plist" "$RUNNER_TEMP/notary.json" \
+                "$GITHUB_WORKSPACE/apple/Config/Local.xcconfig"

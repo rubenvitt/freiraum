@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Export für den Mac-Release (.github/workflows/mac-release.yml).
+     teamID und provisioningProfiles setzt die CI zur Laufzeit; hier stehen keine persönlichen Werte. -->
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>developer-id</string>
+	<key>destination</key>
+	<string>export</string>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>signingCertificate</key>
+	<string>Developer ID Application</string>
+	<key>teamID</key>
+	<string></string>
+	<key>provisioningProfiles</key>
+	<dict/>
+</dict>
+</plist>

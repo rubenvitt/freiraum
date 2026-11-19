@@ -86,6 +86,16 @@ struct MenuBarContent: View {
                     .labelStyle(.iconOnly)
                     .disabled(model.isLoading)
                 }
+                #if canImport(Sparkle)
+                if Updater.shared.isAvailable {
+                    Button("Nach Updates suchen …", systemImage: "arrow.down.circle") {
+                        Updater.shared.checkForUpdates()
+                    }
+                    .labelStyle(.iconOnly)
+                    .disabled(!Updater.shared.canCheck)
+                    .help("Nach Updates suchen …")
+                }
+                #endif
                 Button("Beenden", systemImage: "power") { NSApplication.shared.terminate(nil) }
                     .labelStyle(.iconOnly)
             }

@@ -2,6 +2,10 @@
 // die nicht eingecheckt wird.
 FREIRAUM_BUNDLE_PREFIX = dev.example
 FREIRAUM_DOMAIN = freiraum.example.org
+// Sparkle-Updates (nur Mac): Feed-Adresse und öffentlicher EdDSA-Schlüssel. Leer = keine
+// Update-Prüfung; der Release-Workflow (.github/workflows/mac-release.yml) setzt beides.
+FREIRAUM_UPDATE_FEED =
+FREIRAUM_SPARKLE_PUBLIC_KEY =
 DEVELOPMENT_TEAM =
 CODE_SIGN_STYLE = Automatic
 
