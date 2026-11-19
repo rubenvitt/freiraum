@@ -179,7 +179,7 @@ jobs:
           FREIRAUM_UPDATE_FEED = $(xc "$feed")
           FREIRAUM_SPARKLE_PUBLIC_KEY = $(xc "$SPARKLE_PUBLIC_KEY")
           CODE_SIGN_STYLE = Manual
-          CODE_SIGN_IDENTITY = Developer ID Application
+          FREIRAUM_MAC_SIGN_IDENTITY = Developer ID Application
           // Nur die App wird für macOS gebaut (das Widget ist iOS-only, Swift-Pakete erben
           // Projekt-xcconfigs nicht), daher reicht die projektweite Einstellung.
           PROVISIONING_PROFILE_SPECIFIER = $(xc "$PROFIL_UUID")
@@ -192,10 +192,9 @@ jobs:
           brew install xcodegen
           xcodegen generate
 
-      # CODE_SIGN_IDENTITY zusätzlich auf der Kommandozeile: XcodeGen legt für die App
-      # (platform auto, erstes Ziel iOS) auf Target-Ebene „iPhone Developer“ an, was die
-      # Projekt-xcconfig überstimmt. Das Profil bleibt in der xcconfig, weil es auf der
-      # Kommandozeile auch die Swift-Pakete träfe, die keine Profile unterstützen.
+      # Keine Signatur-Einstellungen auf der Kommandozeile: Sie gälten auch für Swift-Pakete und
+      # Build-Plugins (swift-openapi-generator), die dann ein Team verlangen. Die Identität setzt
+      # project.yml am App-Target für das macOS-SDK (FREIRAUM_MAC_SIGN_IDENTITY aus Local.xcconfig).
       - name: Archivieren
         if: steps.check.outputs.enabled == 'true'
         env:
@@ -209,7 +208,6 @@ jobs:
           -derivedDataPath "$DERIVED_DATA"
           -skipPackagePluginValidation -skipMacroValidation
           MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD"
-          CODE_SIGN_IDENTITY="Developer ID Application"
 
       # Der Export signiert die App samt Sparkles verschachtelten Helfern (Autoupdate,
       # Updater.app, XPC-Dienste) neu mit Developer ID; ein manuelles Nachsignieren ist nicht nötig.
