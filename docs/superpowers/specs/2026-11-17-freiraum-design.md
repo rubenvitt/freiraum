@@ -24,13 +24,13 @@ Design-Entwurf: https://claude.ai/artifact/Uioh2erQiqv4nLqFDVfp6P
 | Backend | Bankimport, Kategorisierung, Budget-Logik, Sync, Autorisierung | E0–E2 |
 | iOS (SwiftUI) | Übersicht, Buchungen bestätigen, Barausgaben erfassen, Widget, Benachrichtigungen | E3 |
 | macOS (SwiftUI Multiplatform) | Planen, Töpfe umschichten, Auswertungen, Menüleiste | E5 |
-| Web | Zugang ohne Installation, zunächst nur Auswertungen | E6, später |
+| Web | Zugang ohne Installation, zunächst nur Auswertungen | E6, [ADR 0007](../../adr/0007-web-oberflaeche.md) |
 
 Beide Personen nutzen iPhones, deshalb ist Web nicht Teil des ersten Wurfs.
 
 ### Technik
 
-Festgelegt in [ADR 0001](../../adr/0001-technik-grundgeruest.md) (E0, FREI-1), für die Apps in [ADR 0004](../../adr/0004-ios-app.md) (E3, FREI-4). Ursprünglicher Vorschlag:
+Festgelegt in [ADR 0001](../../adr/0001-technik-grundgeruest.md) (E0, FREI-1), für die Apps in [ADR 0004](../../adr/0004-ios-app.md) (E3, FREI-4), für das Web in [ADR 0007](../../adr/0007-web-oberflaeche.md) (E6, FREI-7). Ursprünglicher Vorschlag:
 
 - Backend: TypeScript (z. B. Hono) + PostgreSQL, als Container auf dem Homelab (ARM64).
 - API-Vertrag: OpenAPI als Quelle der Wahrheit; Swift-Client per `swift-openapi-generator`, Web-Client generiert.

@@ -18,6 +18,7 @@ const config: Config = {
   invitationTtlHours: 72,
   migrateOnStart: false,
   llm: null,
+  webDistDir: null,
 }
 
 // postgres.js verbindet erst bei der ersten Abfrage; hier wird keine gestellt.

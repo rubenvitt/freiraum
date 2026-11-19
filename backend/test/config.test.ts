@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadConfig } from '../src/config.js'
 
@@ -18,7 +21,15 @@ describe('Konfiguration', () => {
       invitationTtlHours: 72,
       migrateOnStart: true,
       llm: null,
+      webDistDir: null,
     })
+  })
+
+  it('nimmt WEB_DIST_DIR nur mit index.html an', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'freiraum-web-'))
+    expect(() => loadConfig({ ...base, WEB_DIST_DIR: dir })).toThrow(/WEB_DIST_DIR/)
+    writeFileSync(join(dir, 'index.html'), '<!doctype html>')
+    expect(loadConfig({ ...base, WEB_DIST_DIR: dir }).webDistDir).toBe(dir)
   })
 
   it('schaltet das LLM nur mit Schlüssel ein', () => {

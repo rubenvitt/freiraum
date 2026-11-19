@@ -18,6 +18,7 @@ export const testConfig: Config = {
   invitationTtlHours: 72,
   migrateOnStart: false,
   llm: null,
+  webDistDir: null,
 }
 
 export function setupTestApp(options: { llm?: LlmCategorizer } = {}) {

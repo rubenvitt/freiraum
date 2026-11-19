@@ -2,7 +2,7 @@ import { createRoute, type OpenAPIHono, z } from '@hono/zod-openapi'
 import type { AppEnv } from '../app.js'
 import { requireAuth } from '../auth/middleware.js'
 import type { BudgetMonthView, Pot } from '../budget/service.js'
-import { Cents, error, IsoDate, json, Month, pathId } from './common.js'
+import { authRead, authWrite, Cents, error, IsoDate, json, Month, pathId } from './common.js'
 
 const PotKind = z.enum(['monatlich', 'ruecklage', 'ziel', 'erst_ich']).openapi({
   description:
@@ -148,7 +148,7 @@ const listPots = createRoute({
   tags: ['Budget'],
   summary: 'Töpfe eines Haushalts',
   description: 'Lesen auch mit der Freigabe „budget“ der Inhaberin eines privaten Haushalts.',
-  security: [{ bearerAuth: [] }],
+  security: authRead,
   middleware: [requireAuth] as const,
   request: {
     params: householdParams,
@@ -172,7 +172,7 @@ const createPot = createRoute({
   path: '/v1/households/{householdId}/pots',
   tags: ['Budget'],
   summary: 'Topf anlegen',
-  security: [{ bearerAuth: [] }],
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: {
     params: householdParams,
@@ -205,7 +205,7 @@ const updatePot = createRoute({
   tags: ['Budget'],
   summary: 'Topf ändern oder archivieren',
   description: 'Der Typ lässt sich nicht ändern. Archivieren geht nur, wenn der Topf leer ist.',
-  security: [{ bearerAuth: [] }],
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: {
     params: z.object({ potId: pathId('potId') }),
@@ -263,7 +263,7 @@ const reorderPots = createRoute({
     'Legt die Reihenfolge aller aktiven Töpfe eines Haushalts in einem Schritt fest (sortOrder ' +
     '= Position). Die Liste muss genau die aktiven Töpfe enthalten. Erst-ich-Töpfe werden in ' +
     'dieser Reihenfolge gefüllt; die Automatik läuft danach für den laufenden Monat neu.',
-  security: [{ bearerAuth: [] }],
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: {
     params: householdParams,
@@ -287,7 +287,7 @@ const getMonth = createRoute({
   tags: ['Budget'],
   summary: 'Budget eines Monats: „Noch ohne Aufgabe“ und alle Töpfe',
   description: 'Lesen auch mit der Freigabe „budget“ der Inhaberin eines privaten Haushalts.',
-  security: [{ bearerAuth: [] }],
+  security: authRead,
   middleware: [requireAuth] as const,
   request: { params: monthParams },
   responses: {
@@ -307,7 +307,7 @@ const setAssignment = createRoute({
     'Erhöhen geht nur, solange „Noch ohne Aufgabe“ im Monat (und im laufenden Monat, falls ' +
     'später) nicht negativ wird. Senken geht immer. Eine eigene Zuweisung an einen Erst-ich-Topf ' +
     'schaltet die Automatik für diesen Topf und Monat ab.',
-  security: [{ bearerAuth: [] }],
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: {
     params: monthParams.extend({ potId: pathId('potId') }),
@@ -333,7 +333,7 @@ const moveMoney = createRoute({
     'einer Transaktion: Wird abgelehnt, ändert sich nichts. Fehlt `fromPotId` oder ist es null, ' +
     'kommt das Geld aus „Noch ohne Aufgabe“; dann gilt wie beim Erhöhen, dass „Noch ohne Aufgabe“ nicht ' +
     'negativ werden darf. Zwischen Töpfen bleibt „Noch ohne Aufgabe“ unverändert.',
-  security: [{ bearerAuth: [] }],
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: {
     params: monthParams,
@@ -366,7 +366,7 @@ const fillErstIch = createRoute({
   description:
     'Läuft sonst von selbst nach jeder neuen Einnahme. Füllt die Erst-ich-Töpfe in ihrer ' +
     'Reihenfolge bis zu ihrem Plan, soweit „Noch ohne Aufgabe“ reicht.',
-  security: [{ bearerAuth: [] }],
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: { params: monthParams },
   responses: {
@@ -386,7 +386,7 @@ const closeMonth = createRoute({
   description:
     'Nur vergangene Monate, der Reihe nach, und nur wenn alle Buchungen des Monats bestätigt ' +
     'sind. Danach nimmt der Monat keine Zuweisungen mehr an; der Stand wird festgehalten.',
-  security: [{ bearerAuth: [] }],
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: { params: monthParams },
   responses: {
@@ -403,7 +403,7 @@ const reopenMonth = createRoute({
   path: '/v1/households/{householdId}/budget/{month}/closing',
   tags: ['Budget'],
   summary: 'Abschluss zurücknehmen (nur der zuletzt abgeschlossene Monat)',
-  security: [{ bearerAuth: [] }],
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: { params: monthParams },
   responses: {
@@ -420,7 +420,7 @@ const getStart = createRoute({
   path: '/v1/households/{householdId}/budget-start',
   tags: ['Budget'],
   summary: 'Budgetbeginn und Anfangsbestand eines Haushalts',
-  security: [{ bearerAuth: [] }],
+  security: authRead,
   middleware: [requireAuth] as const,
   request: { params: householdParams },
   responses: {
@@ -440,7 +440,7 @@ const setStart = createRoute({
     'Buchungen vor dem Startmonat zählen nicht im Budget (Import und Serien behalten sie). Geht ' +
     'nur, solange kein Monat abgeschlossen ist und vor dem neuen Start keine eigene Zuweisung ' +
     'liegt. Rückt der Start nach vorn, bekommen die neu hinzukommenden Buchungen Vorschläge.',
-  security: [{ bearerAuth: [] }],
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: {
     params: householdParams,
@@ -463,7 +463,7 @@ const setBalance = createRoute({
   description:
     'Stand am Ende des Tages `date`, einschließlich aller Buchungen bis dahin. Daraus leitet ' +
     'sich der Anfangsbestand zum Budgetbeginn ab. Ersetzt einen bekannten Kontostand.',
-  security: [{ bearerAuth: [] }],
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: {
     params: z.object({ accountId: pathId('accountId') }),

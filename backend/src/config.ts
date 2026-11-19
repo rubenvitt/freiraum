@@ -1,3 +1,7 @@
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 /**
  * Konfiguration ausschließlich aus Umgebungsvariablen. Secrets gehören nie ins Repo.
  */
@@ -16,6 +20,8 @@ export interface Config {
   migrateOnStart: boolean
   /** LLM für Kategorisierungsvorschläge; null = aus (nur Regeln schlagen vor) */
   llm: LlmConfig | null
+  /** Build der Web-Oberfläche (index.html + assets/); null = keine, `/` führt zur Registrierung */
+  webDistDir: string | null
 }
 
 export interface LlmConfig {
@@ -89,6 +95,22 @@ function loadLlm(env: Env): LlmConfig | null {
   }
 }
 
+/**
+ * Verzeichnis mit dem Build der Web-Oberfläche. Mit `WEB_DIST_DIR` muss dort eine index.html
+ * liegen (sonst ein Konfigurationsfehler); ohne gilt `web/` neben `dist/` im Image, falls vorhanden.
+ */
+function loadWebDistDir(env: Env): string | null {
+  const explicit = env.WEB_DIST_DIR?.trim()
+  if (explicit) {
+    if (!existsSync(join(explicit, 'index.html'))) {
+      throw new Error(`Umgebungsvariable WEB_DIST_DIR: ${explicit} enthält keine index.html`)
+    }
+    return explicit
+  }
+  const fallback = fileURLToPath(new URL('../web/', import.meta.url))
+  return existsSync(join(fallback, 'index.html')) ? fallback : null
+}
+
 export function loadConfig(env: Env = process.env): Config {
   const rpId = required(env, 'WEBAUTHN_RP_ID')
   const origins = list(env, 'WEBAUTHN_ORIGINS')
@@ -105,5 +127,6 @@ export function loadConfig(env: Env = process.env): Config {
     invitationTtlHours: positiveInt(env, 'INVITATION_TTL_HOURS', 72),
     migrateOnStart: (env.MIGRATE_ON_START ?? 'true').trim().toLowerCase() !== 'false',
     llm: loadLlm(env),
+    webDistDir: loadWebDistDir(env),
   }
 }

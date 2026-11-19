@@ -3,7 +3,7 @@ name: Backend
 on:
   push:
     branches: [main]
-    paths: ['backend/**', 'openapi/**', '.github/workflows/backend.yml']
+    paths: ['backend/**', 'web/**', 'openapi/**', '.dockerignore', '.github/workflows/backend.yml']
   pull_request:
     paths: ['backend/**', 'openapi/**', '.github/workflows/backend.yml']
 
@@ -64,7 +64,9 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v6
         with:
-          context: backend
+          # Kontext = Repo-Wurzel: Das Image enthält auch die Web-Oberfläche aus web/ (ADR 0007).
+          context: .
+          file: backend/Dockerfile
           platforms: linux/arm64,linux/amd64
           push: true
           tags: |

@@ -163,3 +163,8 @@ code {
 #umgebung {
   margin: 0 0 1rem;
 }
+
+.weiter {
+  text-align: center;
+  font-weight: 600;
+}
