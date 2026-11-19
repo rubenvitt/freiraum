@@ -27,3 +27,8 @@ export const Cents = z
   .openapi({ description: 'Betrag in Cent; negativ = Ausgang', example: -1299 })
 
 export const pathId = (name: string) => z.uuid().openapi({ param: { name, in: 'path' } })
+
+/** Lesende Routen: Bearer-Token der Apps oder Sitzungs-Cookie des Browsers (ADR 0007). */
+export const authRead: Record<string, string[]>[] = [{ bearerAuth: [] }, { cookieAuth: [] }]
+/** Schreibende Routen: nur Bearer-Token; das Cookie öffnet sie nie. */
+export const authWrite: Record<string, string[]>[] = [{ bearerAuth: [] }]

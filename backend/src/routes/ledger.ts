@@ -2,7 +2,7 @@ import { createRoute, type OpenAPIHono, z } from '@hono/zod-openapi'
 import type { AppEnv } from '../app.js'
 import { requireAuth } from '../auth/middleware.js'
 import { type Account, MAX_IMPORT_SIZE } from '../ledger/service.js'
-import { Cents, error, IsoDate, json } from './common.js'
+import { authRead, authWrite, Cents, error, IsoDate, json } from './common.js'
 
 const Iban = z
   .string()
@@ -205,7 +205,7 @@ const listHouseholds = createRoute({
   path: '/v1/households',
   tags: ['Haushalte'],
   summary: 'Haushalte, in denen die angemeldete Person Mitglied ist',
-  security: [{ bearerAuth: [] }],
+  security: authRead,
   middleware: [requireAuth] as const,
   responses: {
     200: json(z.object({ items: z.array(HouseholdSchema) }), 'Haushalte'),
@@ -218,7 +218,7 @@ const createAccount = createRoute({
   path: '/v1/accounts',
   tags: ['Konten'],
   summary: 'Konto in einem eigenen Haushalt anlegen',
-  security: [{ bearerAuth: [] }],
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: {
     body: json(
@@ -245,7 +245,7 @@ const listAccounts = createRoute({
   path: '/v1/accounts',
   tags: ['Konten'],
   summary: 'Konten aller eigenen Haushalte',
-  security: [{ bearerAuth: [] }],
+  security: authRead,
   middleware: [requireAuth] as const,
   responses: {
     200: json(z.object({ items: z.array(AccountSchema) }), 'Konten'),
@@ -264,7 +264,7 @@ const importTransactions = createRoute({
     'selben Tag). ' +
     'Ein Abruf sollte deshalb immer ganze Tage abdecken. Danach werden die wiederkehrenden Serien ' +
     'des Kontos neu berechnet.',
-  security: [{ bearerAuth: [] }],
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: {
     params: z.object({ accountId: AccountId }),
@@ -287,7 +287,7 @@ const listTransactions = createRoute({
   path: '/v1/accounts/{accountId}/transactions',
   tags: ['Konten'],
   summary: 'Buchungen eines Kontos, neueste zuerst',
-  security: [{ bearerAuth: [] }],
+  security: authRead,
   middleware: [requireAuth] as const,
   request: {
     params: z.object({ accountId: AccountId }),
@@ -310,7 +310,7 @@ const listRecurring = createRoute({
   path: '/v1/recurring',
   tags: ['Wiederkehrend'],
   summary: 'Erkannte wiederkehrende Buchungen (Abos, Miete, Gehalt)',
-  security: [{ bearerAuth: [] }],
+  security: authRead,
   middleware: [requireAuth] as const,
   request: {
     query: z.object({

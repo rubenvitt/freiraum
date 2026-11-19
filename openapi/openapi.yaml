@@ -10,6 +10,11 @@ components:
       type: http
       scheme: bearer
       description: Sitzungs-Token aus /v1/auth/…/verify
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: __Host-freiraum_session
+      description: Sitzung im Browser aus /v1/auth/login/verify-web (HttpOnly). Gilt nur für lesende Anfragen und fürs Abmelden.
   schemas:
     Health:
       type: object
@@ -304,6 +309,18 @@ components:
         - rawId
         - type
         - response
+    WebSession:
+      type: object
+      properties:
+        expiresAt:
+          type: string
+          format: date-time
+        person:
+          $ref: "#/components/schemas/Person"
+      required:
+        - expiresAt
+        - person
+      description: "Sitzung im Browser: Das Token steht nur im HttpOnly-Cookie, nie im Body."
     Household:
       type: object
       properties:
@@ -2333,13 +2350,56 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /v1/auth/login/verify-web:
+    post:
+      tags:
+        - Anmeldung
+      summary: Anmeldung mit Passkey im Browser abschließen (Sitzung als HttpOnly-Cookie)
+      description: Wie /v1/auth/login/verify, aber das Token kommt nur als Cookie `__Host-freiraum_session` (Secure, HttpOnly, SameSite=Strict). Das Cookie gilt nur für lesende Anfragen und fürs Abmelden.
+      requestBody:
+        description: Antwort des Authenticators
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                challengeId:
+                  type: string
+                  format: uuid
+                  description: Kennung der Anfrage aus …/options
+                credential:
+                  $ref: "#/components/schemas/AuthenticationCredential"
+              required:
+                - challengeId
+                - credential
+      responses:
+        "200":
+          description: Sitzung erstellt, Cookie gesetzt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebSession"
+        "400":
+          description: Ungültige Anfrage oder abgelaufene Challenge
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Passkey abgelehnt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/auth/logout:
     post:
       tags:
         - Anmeldung
       summary: Aktuelle Sitzung beenden
-      security:
+      description: Per Bearer-Token oder, im Browser, per Sitzungs-Cookie mit erlaubtem `Origin`. Löscht das Cookie.
+      security: &a1
         - bearerAuth: []
+        - cookieAuth: []
       responses:
         "204":
           description: Abgemeldet
@@ -2354,8 +2414,7 @@ paths:
       tags:
         - Person
       summary: Angemeldete Person
-      security:
-        - bearerAuth: []
+      security: *a1
       responses:
         "200":
           description: Angemeldete Person
@@ -2374,8 +2433,7 @@ paths:
       tags:
         - Haushalte
       summary: Haushalte, in denen die angemeldete Person Mitglied ist
-      security:
-        - bearerAuth: []
+      security: *a1
       responses:
         "200":
           description: Haushalte
@@ -2401,7 +2459,7 @@ paths:
       tags:
         - Konten
       summary: Konto in einem eigenen Haushalt anlegen
-      security:
+      security: &a2
         - bearerAuth: []
       requestBody:
         description: Neues Konto
@@ -2466,8 +2524,7 @@ paths:
       tags:
         - Konten
       summary: Konten aller eigenen Haushalte
-      security:
-        - bearerAuth: []
+      security: *a1
       responses:
         "200":
           description: Konten
@@ -2494,8 +2551,7 @@ paths:
         - Konten
       summary: Buchungen idempotent importieren
       description: "Bekannte Buchungen werden übersprungen: Schlüssel ist die Quell-ID, sonst ein Hash aus Konto, Buchungstag, Betrag, Verwendungszweck und Gegenpartei (plus Vorkommen bei gleichen Buchungen am selben Tag). Ein Abruf sollte deshalb immer ganze Tage abdecken. Danach werden die wiederkehrenden Serien des Kontos neu berechnet."
-      security:
-        - bearerAuth: []
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -2553,8 +2609,7 @@ paths:
       tags:
         - Konten
       summary: Buchungen eines Kontos, neueste zuerst
-      security:
-        - bearerAuth: []
+      security: *a1
       parameters:
         - schema:
             type: string
@@ -2621,8 +2676,7 @@ paths:
       tags:
         - Wiederkehrend
       summary: Erkannte wiederkehrende Buchungen (Abos, Miete, Gehalt)
-      security:
-        - bearerAuth: []
+      security: *a1
       parameters:
         - schema:
             type: string
@@ -2670,8 +2724,7 @@ paths:
         - Budget
       summary: Töpfe eines Haushalts
       description: Lesen auch mit der Freigabe „budget“ der Inhaberin eines privaten Haushalts.
-      security:
-        - bearerAuth: []
+      security: *a1
       parameters:
         - schema:
             type: string
@@ -2724,8 +2777,7 @@ paths:
       tags:
         - Budget
       summary: Topf anlegen
-      security:
-        - bearerAuth: []
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -2827,8 +2879,7 @@ paths:
         - Budget
       summary: Topf ändern oder archivieren
       description: Der Typ lässt sich nicht ändern. Archivieren geht nur, wenn der Topf leer ist.
-      security:
-        - bearerAuth: []
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -2934,8 +2985,7 @@ paths:
         - Budget
       summary: Töpfe sortieren
       description: Legt die Reihenfolge aller aktiven Töpfe eines Haushalts in einem Schritt fest (sortOrder = Position). Die Liste muss genau die aktiven Töpfe enthalten. Erst-ich-Töpfe werden in dieser Reihenfolge gefüllt; die Automatik läuft danach für den laufenden Monat neu.
-      security:
-        - bearerAuth: []
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -3001,8 +3051,7 @@ paths:
       tags:
         - Budget
       summary: Budgetbeginn und Anfangsbestand eines Haushalts
-      security:
-        - bearerAuth: []
+      security: *a1
       parameters:
         - schema:
             type: string
@@ -3040,8 +3089,7 @@ paths:
         - Budget
       summary: Budgetbeginn festlegen
       description: Buchungen vor dem Startmonat zählen nicht im Budget (Import und Serien behalten sie). Geht nur, solange kein Monat abgeschlossen ist und vor dem neuen Start keine eigene Zuweisung liegt. Rückt der Start nach vorn, bekommen die neu hinzukommenden Buchungen Vorschläge.
-      security:
-        - bearerAuth: []
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -3099,8 +3147,7 @@ paths:
         - Budget
       summary: Kontostand von Hand erfassen
       description: Stand am Ende des Tages `date`, einschließlich aller Buchungen bis dahin. Daraus leitet sich der Anfangsbestand zum Budgetbeginn ab. Ersetzt einen bekannten Kontostand.
-      security:
-        - bearerAuth: []
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -3165,8 +3212,7 @@ paths:
         - Budget
       summary: "Budget eines Monats: „Noch ohne Aufgabe“ und alle Töpfe"
       description: Lesen auch mit der Freigabe „budget“ der Inhaberin eines privaten Haushalts.
-      security:
-        - bearerAuth: []
+      security: *a1
       parameters:
         - schema:
             type: string
@@ -3212,8 +3258,7 @@ paths:
         - Budget
       summary: Zuweisung eines Topfs für einen Monat setzen
       description: Erhöhen geht nur, solange „Noch ohne Aufgabe“ im Monat (und im laufenden Monat, falls später) nicht negativ wird. Senken geht immer. Eine eigene Zuweisung an einen Erst-ich-Topf schaltet die Automatik für diesen Topf und Monat ab.
-      security:
-        - bearerAuth: []
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -3292,8 +3337,7 @@ paths:
         - Budget
       summary: Geld umschichten, in einem Schritt
       description: "Senkt die Zuweisung der Quelle und erhöht die des Ziels um denselben Betrag, beides in einer Transaktion: Wird abgelehnt, ändert sich nichts. Fehlt `fromPotId` oder ist es null, kommt das Geld aus „Noch ohne Aufgabe“; dann gilt wie beim Erhöhen, dass „Noch ohne Aufgabe“ nicht negativ werden darf. Zwischen Töpfen bleibt „Noch ohne Aufgabe“ unverändert."
-      security:
-        - bearerAuth: []
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -3374,8 +3418,7 @@ paths:
         - Budget
       summary: Erst-ich-Automatik für einen Monat von Hand anstoßen
       description: Läuft sonst von selbst nach jeder neuen Einnahme. Füllt die Erst-ich-Töpfe in ihrer Reihenfolge bis zu ihrem Plan, soweit „Noch ohne Aufgabe“ reicht.
-      security:
-        - bearerAuth: []
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -3427,8 +3470,7 @@ paths:
         - Budget
       summary: Monat abschließen
       description: Nur vergangene Monate, der Reihe nach, und nur wenn alle Buchungen des Monats bestätigt sind. Danach nimmt der Monat keine Zuweisungen mehr an; der Stand wird festgehalten.
-      security:
-        - bearerAuth: []
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -3478,8 +3520,7 @@ paths:
       tags:
         - Budget
       summary: Abschluss zurücknehmen (nur der zuletzt abgeschlossene Monat)
-      security:
-        - bearerAuth: []
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -3530,8 +3571,7 @@ paths:
       tags:
         - Kategorisierung
       summary: Buchungen, die auf Bestätigung warten (neueste zuerst)
-      security:
-        - bearerAuth: []
+      security: *a1
       parameters:
         - schema:
             type: string
@@ -3578,8 +3618,7 @@ paths:
       tags:
         - Kategorisierung
       summary: Vorschlag mit einem Tipp bestätigen
-      security:
-        - bearerAuth: []
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -3624,8 +3663,7 @@ paths:
         - Kategorisierung
       summary: Aufteilung festlegen (korrigieren) und bestätigen
       description: Die Summe der Aufteilungen muss dem Buchungsbetrag entsprechen; Töpfe kommen aus dem Haushalt des Kontos, bei privaten Konten auch aus dem gemeinsamen (Ausgleich). Weicht eine einfache Zuordnung vom Vorschlag ab, entsteht eine Regel für die Gegenpartei (außer learn = false), und offene Buchungen werden neu vorgeschlagen.
-      security:
-        - bearerAuth: []
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -3700,8 +3738,7 @@ paths:
         - Konten
       summary: Barausgabe erfassen
       description: "Legt im Bargeldkonto eine bestätigte Ausgabe an, gleich einem Topf aus dem Haushalt des Kontos zugeordnet. Idempotent über clientId: Ein zweiter Aufruf mit derselben clientId legt nichts an und liefert die vorhandene Buchung (200). Es entsteht keine Regel."
-      security:
-        - bearerAuth: []
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -3784,8 +3821,7 @@ paths:
       tags:
         - Kategorisierung
       summary: Kategorisierungsregeln eines Haushalts
-      security:
-        - bearerAuth: []
+      security: *a1
       parameters:
         - schema:
             type: string
@@ -3830,8 +3866,7 @@ paths:
         - Kategorisierung
       summary: Regel von Hand anlegen und auf offene Buchungen anwenden
       description: Alle gesetzten Merkmale müssen passen. Bei mehreren Treffern gewinnt die spezifischste Regel, bei Gleichstand die zuletzt geänderte. Gleiche Merkmale ersetzen eine bestehende Regel.
-      security:
-        - bearerAuth: []
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -3889,8 +3924,7 @@ paths:
       tags:
         - Kategorisierung
       summary: Regel löschen (bestehende Vorschläge bleiben)
-      security:
-        - bearerAuth: []
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -3924,8 +3958,7 @@ paths:
       tags:
         - Paar
       summary: Eigene Freigaben (erteilt und erhalten)
-      security: &a1
-        - bearerAuth: []
+      security: *a1
       responses:
         "200":
           description: Freigaben
@@ -3957,7 +3990,7 @@ paths:
         - Paar
       summary: Kennzahl oder Sicht auf den eigenen privaten Haushalt freigeben
       description: Nur an die Person, mit der man einen Haushalt teilt. Wiederholen ändert nichts.
-      security: *a1
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -4007,7 +4040,7 @@ paths:
       tags:
         - Paar
       summary: Freigabe zurücknehmen (wirkt sofort)
-      security: *a1
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -4146,7 +4179,7 @@ paths:
         - Paar
       summary: Eigene Einzahlungsregel ab einem Monat setzen
       description: fest = Betrag je Monat (0 = Pause); prozent = Anteil der eigenen Einnahmen des Monats im privaten Haushalt (Netto). Es gilt die jüngste Regel bis zum Monat. Jede Person setzt nur ihre eigene.
-      security: *a1
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -4223,7 +4256,7 @@ paths:
       tags:
         - Paar
       summary: Eigene Einzahlungsregel ab diesem Monat löschen (die vorige gilt wieder)
-      security: *a1
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -4366,7 +4399,7 @@ paths:
         - Paar
       summary: Ausgleich von Hand verbuchen oder mit der Einzahlung verrechnen
       description: "Nur für den eigenen Saldo und höchstens so viel, wie offen ist. Eine Zahlung (z. B. bar erhalten) gibt es nur für eine Forderung. Eine Verrechnung geht in beide Richtungen und ergibt sich aus dem Saldo: Bei einer Forderung zählt sie als Erstattung und als zusätzliche Einzahlung (450 € überwiesen + 50 € verrechnet = 500 € Ist), bei einer Schuld als Rückzahlung und als geringere Einzahlung. Sie ändert das private Budget der Person und geht deshalb nicht in abgeschlossenen Monaten und nicht vor dem Budgetbeginn."
-      security: *a1
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -4443,7 +4476,7 @@ paths:
       tags:
         - Paar
       summary: Von Hand verbuchten Ausgleich zurücknehmen (nur den eigenen)
-      security: *a1
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -4486,11 +4519,10 @@ paths:
                 $ref: "#/components/schemas/Error"
   /v1/households/{householdId}/analytics/metrics:
     get:
-      tags: &a2
+      tags: &a3
         - Auswertungen
       summary: "Kennzahlen je Monat: Sparquote, Fixkostenanteil, Alter des Geldes; dazu Runway"
-      security: &a3
-        - bearerAuth: []
+      security: *a1
       parameters:
         - schema:
             type: string
@@ -4549,9 +4581,9 @@ paths:
                 $ref: "#/components/schemas/Error"
   /v1/households/{householdId}/analytics/flow:
     get:
-      tags: *a2
+      tags: *a3
       summary: "Geldfluss als Sankey: woher, wohin"
-      security: *a3
+      security: *a1
       parameters:
         - schema:
             type: string
@@ -4610,10 +4642,10 @@ paths:
                 $ref: "#/components/schemas/Error"
   /v1/persons/{personId}/analytics/flow:
     get:
-      tags: *a2
+      tags: *a3
       summary: "Geldfluss über die eigenen Haushalte: privat → Einzahlung → gemeinsam"
       description: "Nur für die eigene Person. Für die andere Person gibt es keine Freigabe, die Beträge aus ihrem privaten Haushalt öffnet: immer 404."
-      security: *a3
+      security: *a1
       parameters:
         - schema:
             type: string
@@ -4672,9 +4704,9 @@ paths:
                 $ref: "#/components/schemas/Error"
   /v1/households/{householdId}/analytics/anomalies:
     get:
-      tags: *a2
+      tags: *a3
       summary: "Auffälligkeiten eines Monats: hohe Ausgaben, neue Abos, Preiserhöhungen"
-      security: *a3
+      security: *a1
       parameters:
         - schema:
             type: string
@@ -4718,9 +4750,9 @@ paths:
                 $ref: "#/components/schemas/Error"
   /v1/households/{householdId}/analytics/goals:
     get:
-      tags: *a2
+      tags: *a3
       summary: Ziel-Töpfe mit Prognose, wann das Ziel erreicht ist
-      security: *a3
+      security: *a1
       parameters:
         - schema:
             type: string
@@ -4755,9 +4787,9 @@ paths:
                 $ref: "#/components/schemas/Error"
   /v1/households/{householdId}/analytics/ownership-costs:
     get:
-      tags: *a2
+      tags: *a3
       summary: "Besitzkosten: Was kostet mich mein Besitz?"
-      security: *a3
+      security: *a1
       parameters:
         - schema:
             type: string
@@ -4819,7 +4851,7 @@ paths:
       tags:
         - Besitz
       summary: Besitz eines Haushalts
-      security: *a3
+      security: *a1
       parameters:
         - schema:
             type: string
@@ -4872,7 +4904,7 @@ paths:
       tags:
         - Besitz
       summary: Besitz anlegen und mit Töpfen verknüpfen
-      security: *a3
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -4951,7 +4983,7 @@ paths:
       tags:
         - Besitz
       summary: Besitz ändern, Töpfe neu verknüpfen oder archivieren
-      security: *a3
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -5030,7 +5062,7 @@ paths:
       tags:
         - Besitz
       summary: Besitz löschen (Töpfe und Buchungen bleiben)
-      security: *a3
+      security: *a2
       parameters:
         - schema:
             type: string

@@ -44,6 +44,7 @@ describe('OpenAPI-Vertrag', () => {
       '/v1/assets/{assetId}',
       '/v1/auth/login/options',
       '/v1/auth/login/verify',
+      '/v1/auth/login/verify-web',
       '/v1/auth/logout',
       '/v1/auth/registration/options',
       '/v1/auth/registration/verify',

@@ -2,7 +2,7 @@ import { createRoute, type OpenAPIHono, z } from '@hono/zod-openapi'
 import type { AppEnv } from '../app.js'
 import { requireAuth } from '../auth/middleware.js'
 import type { Rule } from '../categorize/rules.js'
-import { Cents, error, IsoDate, json, pathId } from './common.js'
+import { authRead, authWrite, Cents, error, IsoDate, json, pathId } from './common.js'
 import { CounterAccountId, SplitInputSchema, SplitKind, TransactionSchema } from './ledger.js'
 
 const Iban = z
@@ -66,7 +66,7 @@ const listPending = createRoute({
   path: '/v1/transactions/pending',
   tags: ['Kategorisierung'],
   summary: 'Buchungen, die auf Bestätigung warten (neueste zuerst)',
-  security: [{ bearerAuth: [] }],
+  security: authRead,
   middleware: [requireAuth] as const,
   request: {
     query: z.object({
@@ -86,7 +86,7 @@ const confirm = createRoute({
   path: '/v1/transactions/{transactionId}/confirm',
   tags: ['Kategorisierung'],
   summary: 'Vorschlag mit einem Tipp bestätigen',
-  security: [{ bearerAuth: [] }],
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: { params: transactionParams },
   responses: {
@@ -107,7 +107,7 @@ const setSplits = createRoute({
     'Die Summe der Aufteilungen muss dem Buchungsbetrag entsprechen; Töpfe kommen aus dem ' +
     'Haushalt des Kontos, bei privaten Konten auch aus dem gemeinsamen (Ausgleich). Weicht eine einfache Zuordnung vom Vorschlag ab, entsteht eine Regel ' +
     'für die Gegenpartei (außer learn = false), und offene Buchungen werden neu vorgeschlagen.',
-  security: [{ bearerAuth: [] }],
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: {
     params: transactionParams,
@@ -143,7 +143,7 @@ const listRules = createRoute({
   path: '/v1/households/{householdId}/rules',
   tags: ['Kategorisierung'],
   summary: 'Kategorisierungsregeln eines Haushalts',
-  security: [{ bearerAuth: [] }],
+  security: authRead,
   middleware: [requireAuth] as const,
   request: { params: z.object({ householdId: pathId('householdId') }) },
   responses: {
@@ -162,7 +162,7 @@ const createRule = createRoute({
   description:
     'Alle gesetzten Merkmale müssen passen. Bei mehreren Treffern gewinnt die spezifischste ' +
     'Regel, bei Gleichstand die zuletzt geänderte. Gleiche Merkmale ersetzen eine bestehende Regel.',
-  security: [{ bearerAuth: [] }],
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: {
     params: z.object({ householdId: pathId('householdId') }),
@@ -185,7 +185,7 @@ const deleteRule = createRoute({
   path: '/v1/rules/{ruleId}',
   tags: ['Kategorisierung'],
   summary: 'Regel löschen (bestehende Vorschläge bleiben)',
-  security: [{ bearerAuth: [] }],
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: { params: z.object({ ruleId: pathId('ruleId') }) },
   responses: {
@@ -205,7 +205,7 @@ const recordCashExpense = createRoute({
     'Legt im Bargeldkonto eine bestätigte Ausgabe an, gleich einem Topf aus dem Haushalt des ' +
     'Kontos zugeordnet. Idempotent über clientId: Ein zweiter Aufruf mit derselben clientId legt ' +
     'nichts an und liefert die vorhandene Buchung (200). Es entsteht keine Regel.',
-  security: [{ bearerAuth: [] }],
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: {
     params: z.object({ accountId: pathId('accountId') }),

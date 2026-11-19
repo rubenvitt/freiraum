@@ -4,7 +4,7 @@ import type { AppEnv } from '../app.js'
 import { requireAuth } from '../auth/middleware.js'
 import { monthOf } from '../budget/months.js'
 import { todayUtc } from '../ledger/dates.js'
-import { error, json, Month, pathId } from './common.js'
+import { authRead, authWrite, error, json, Month, pathId } from './common.js'
 
 const Bp = z
   .number()
@@ -280,7 +280,6 @@ const range = z.object({
   to: Month.optional().openapi({ description: 'Standard: laufender Monat' }),
 })
 
-const security = [{ bearerAuth: [] }]
 const tags = ['Auswertungen']
 const common = {
   400: error('Ungültige Anfrage'),
@@ -296,7 +295,7 @@ const getMetrics = createRoute({
   path: '/v1/households/{householdId}/analytics/metrics',
   tags,
   summary: 'Kennzahlen je Monat: Sparquote, Fixkostenanteil, Alter des Geldes; dazu Runway',
-  security,
+  security: authRead,
   middleware: [requireAuth] as const,
   request: {
     params: householdParams,
@@ -312,7 +311,7 @@ const getFlow = createRoute({
   path: '/v1/households/{householdId}/analytics/flow',
   tags,
   summary: 'Geldfluss als Sankey: woher, wohin',
-  security,
+  security: authRead,
   middleware: [requireAuth] as const,
   request: {
     params: householdParams,
@@ -329,7 +328,7 @@ const getPersonFlow = createRoute({
   description:
     'Nur für die eigene Person. Für die andere Person gibt es keine Freigabe, die Beträge aus ' +
     'ihrem privaten Haushalt öffnet: immer 404.',
-  security,
+  security: authRead,
   middleware: [requireAuth] as const,
   request: {
     params: z.object({ personId: pathId('personId') }),
@@ -349,7 +348,7 @@ const getAnomalies = createRoute({
   path: '/v1/households/{householdId}/analytics/anomalies',
   tags,
   summary: 'Auffälligkeiten eines Monats: hohe Ausgaben, neue Abos, Preiserhöhungen',
-  security,
+  security: authRead,
   middleware: [requireAuth] as const,
   request: {
     params: householdParams,
@@ -365,7 +364,7 @@ const getGoals = createRoute({
   path: '/v1/households/{householdId}/analytics/goals',
   tags,
   summary: 'Ziel-Töpfe mit Prognose, wann das Ziel erreicht ist',
-  security,
+  security: authRead,
   middleware: [requireAuth] as const,
   request: { params: householdParams },
   responses: { 200: json(GoalsSchema, 'Ziele'), ...common },
@@ -376,7 +375,7 @@ const getOwnershipCosts = createRoute({
   path: '/v1/households/{householdId}/analytics/ownership-costs',
   tags,
   summary: 'Besitzkosten: Was kostet mich mein Besitz?',
-  security,
+  security: authRead,
   middleware: [requireAuth] as const,
   request: {
     params: householdParams,
@@ -396,7 +395,7 @@ const listAssets = createRoute({
   path: '/v1/households/{householdId}/assets',
   tags: ['Besitz'],
   summary: 'Besitz eines Haushalts',
-  security,
+  security: authRead,
   middleware: [requireAuth] as const,
   request: {
     params: householdParams,
@@ -415,7 +414,7 @@ const createAsset = createRoute({
   path: '/v1/households/{householdId}/assets',
   tags: ['Besitz'],
   summary: 'Besitz anlegen und mit Töpfen verknüpfen',
-  security,
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: {
     params: householdParams,
@@ -444,7 +443,7 @@ const updateAsset = createRoute({
   path: '/v1/assets/{assetId}',
   tags: ['Besitz'],
   summary: 'Besitz ändern, Töpfe neu verknüpfen oder archivieren',
-  security,
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: {
     params: assetParams,
@@ -474,7 +473,7 @@ const deleteAsset = createRoute({
   path: '/v1/assets/{assetId}',
   tags: ['Besitz'],
   summary: 'Besitz löschen (Töpfe und Buchungen bleiben)',
-  security,
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: { params: assetParams },
   responses: {

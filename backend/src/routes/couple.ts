@@ -11,9 +11,7 @@ import {
   SHARE_SCOPES,
   type ShareEntry,
 } from '../couple/service.js'
-import { error, IsoDate, json, Month, pathId } from './common.js'
-
-const security = [{ bearerAuth: [] }]
+import { authRead, authWrite, error, IsoDate, json, Month, pathId } from './common.js'
 
 const ShareScope = z.enum(SHARE_SCOPES).openapi({
   description:
@@ -215,7 +213,7 @@ const listShares = createRoute({
   path: '/v1/shares',
   tags: ['Paar'],
   summary: 'Eigene Freigaben (erteilt und erhalten)',
-  security,
+  security: authRead,
   middleware: [requireAuth] as const,
   responses: {
     200: json(
@@ -232,7 +230,7 @@ const grantShare = createRoute({
   tags: ['Paar'],
   summary: 'Kennzahl oder Sicht auf den eigenen privaten Haushalt freigeben',
   description: 'Nur an die Person, mit der man einen Haushalt teilt. Wiederholen ändert nichts.',
-  security,
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: { params: shareParams },
   responses: {
@@ -248,7 +246,7 @@ const revokeShare = createRoute({
   path: '/v1/shares/{personId}/{scope}',
   tags: ['Paar'],
   summary: 'Freigabe zurücknehmen (wirkt sofort)',
-  security,
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: { params: shareParams },
   responses: {
@@ -266,7 +264,7 @@ const getMetrics = createRoute({
   description:
     'Für sich selbst alle Kennzahlen, für die andere Person nur die freigegebenen; die übrigen ' +
     'sind null. Kennzahlen sind Anteile und Ja/Nein, keine Beträge.',
-  security,
+  security: authRead,
   middleware: [requireAuth] as const,
   request: {
     params: z.object({
@@ -287,7 +285,7 @@ const listContributionRules = createRoute({
   path: '/v1/households/{householdId}/contribution-rules',
   tags: ['Paar'],
   summary: 'Einzahlungsregeln des gemeinsamen Haushalts (mit Historie)',
-  security,
+  security: authRead,
   middleware: [requireAuth] as const,
   request: { params: z.object({ householdId: pathId('householdId') }) },
   responses: {
@@ -308,7 +306,7 @@ const setContributionRule = createRoute({
     'fest = Betrag je Monat (0 = Pause); prozent = Anteil der eigenen Einnahmen des Monats im ' +
     'privaten Haushalt (Netto). Es gilt die jüngste Regel bis zum Monat. Jede Person setzt nur ' +
     'ihre eigene.',
-  security,
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: {
     params: householdMonth,
@@ -342,7 +340,7 @@ const deleteContributionRule = createRoute({
   path: '/v1/households/{householdId}/contribution-rules/{month}',
   tags: ['Paar'],
   summary: 'Eigene Einzahlungsregel ab diesem Monat löschen (die vorige gilt wieder)',
-  security,
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: { params: householdMonth },
   responses: {
@@ -359,7 +357,7 @@ const getContributions = createRoute({
   path: '/v1/households/{householdId}/contributions/{month}',
   tags: ['Paar'],
   summary: 'Einzahlungen ins Gemeinsame: Soll und Ist je Person',
-  security,
+  security: authRead,
   middleware: [requireAuth] as const,
   request: { params: householdMonth },
   responses: {
@@ -383,7 +381,7 @@ const getSettlements = createRoute({
     'Buchung des gemeinsamen Kontos dem privaten Topf einer Person zugeordnet wird; sie zahlt ' +
     'sie per Überweisung aufs gemeinsame Konto (Art ausgleich) zurück. Forderung und Schuld ' +
     'verrechnen sich; Erstattungen decken der Reihe nach, älteste zuerst.',
-  security,
+  security: authRead,
   middleware: [requireAuth] as const,
   request: { params: z.object({ householdId: pathId('householdId') }) },
   responses: {
@@ -407,7 +405,7 @@ const recordSettlement = createRoute({
     'Einzahlung (450 € überwiesen + 50 € verrechnet = 500 € Ist), bei einer Schuld als ' +
     'Rückzahlung und als geringere Einzahlung. Sie ändert das private Budget der Person und geht ' +
     'deshalb nicht in abgeschlossenen Monaten und nicht vor dem Budgetbeginn.',
-  security,
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: {
     params: z.object({ householdId: pathId('householdId') }),
@@ -438,7 +436,7 @@ const deleteSettlement = createRoute({
   path: '/v1/settlements/{settlementId}',
   tags: ['Paar'],
   summary: 'Von Hand verbuchten Ausgleich zurücknehmen (nur den eigenen)',
-  security,
+  security: authWrite,
   middleware: [requireAuth] as const,
   request: { params: z.object({ settlementId: pathId('settlementId') }) },
   responses: {

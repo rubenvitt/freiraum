@@ -1,5 +1,6 @@
 import { OpenAPIHono } from '@hono/zod-openapi'
 import { AnalyticsService } from './analytics/service.js'
+import { SESSION_COOKIE } from './auth/cookie.js'
 import type { Person } from './auth/service.js'
 import { AuthService } from './auth/service.js'
 import { BudgetService } from './budget/service.js'
@@ -31,7 +32,8 @@ export type AppEnv = {
     couple: CoupleService
     db: Db
     ledger: LedgerService
-    session: { id: string; person: Person }
+    config: Config
+    session: { id: string; person: Person; via: 'bearer' | 'cookie'; token: string }
   }
 }
 
@@ -87,6 +89,7 @@ export function createApp(deps: { db: Db; config: Config; llm?: LlmCategorizer |
     c.set('auth', auth)
     c.set('budget', budget)
     c.set('categorize', categorize)
+    c.set('config', deps.config)
     c.set('couple', couple)
     c.set('db', deps.db)
     c.set('ledger', ledger)
@@ -108,6 +111,13 @@ export function createApp(deps: { db: Db; config: Config; llm?: LlmCategorizer |
     type: 'http',
     scheme: 'bearer',
     description: 'Sitzungs-Token aus /v1/auth/…/verify',
+  })
+  app.openAPIRegistry.registerComponent('securitySchemes', 'cookieAuth', {
+    type: 'apiKey',
+    in: 'cookie',
+    name: SESSION_COOKIE,
+    description:
+      'Sitzung im Browser aus /v1/auth/login/verify-web (HttpOnly). Gilt nur für lesende Anfragen und fürs Abmelden.',
   })
 
   healthRoutes(app, deps.config)
