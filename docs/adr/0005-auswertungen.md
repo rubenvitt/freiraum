@@ -1,6 +1,6 @@
 # ADR 0005: Auswertungen und Besitz (E5)
 
-Stand: 17.11.2026 · Status: vorgeschlagen (mit FREI-6, ergänzt mit FREI-22)
+Stand: 17.11.2026 · Status: vorgeschlagen (mit FREI-6, ergänzt mit FREI-22 und FREI-34)
 
 ## Kontext
 
@@ -190,8 +190,10 @@ ein Umbenennen würde still die Auswertung ändern.
   Quartal, Jahr) endet im angezeigten Monat und beginnt frühestens mit dem Budgetbeginn. Mit
   gemeinsamem Haushalt lässt sich der Geldfluss auf „Über meine Haushalte“ umschalten
   (`/v1/persons/{id}/analytics/flow`); das Layout behandelt beide Graphen gleich.
-- Umschichten in der Planungsansicht sind zwei Zuweisungen: erst die Quelle senken, dann das Ziel
-  erhöhen, damit „Noch ohne Aufgabe“ zwischendurch nie negativ wird. Lehnt der Server das
-  Erhöhen ab (422), nimmt die App das Senken zurück und zeigt seine Meldung. Ein eigener
-  Endpunkt fürs Umschichten in einer Transaktion wäre robuster, falls die Rücknahme scheitert
-  (z. B. Verbindung weg); bisher reicht das Neuladen danach.
+- Umschichten in der Planungsansicht ist ein Aufruf (`POST …/budget/{Monat}/moves`, FREI-34):
+  Der Server senkt die Quelle und erhöht das Ziel in einer Transaktion. Lehnt er ab (409 bei
+  abgeschlossenem Monat, 422 wenn „Noch ohne Aufgabe“ aus ihm negativ würde), ändert sich nichts;
+  die App muss nichts zurücknehmen und zeigt nur seine Meldung. Zwischen Töpfen bleibt „Noch ohne
+  Aufgabe“ unverändert, das geht deshalb auch, wenn es schon negativ ist. (Vorher waren es zwei
+  Zuweisungen mit Rücknahme in der App; brach die Verbindung dazwischen ab, blieb Geld in „Noch
+  ohne Aufgabe“ liegen.)

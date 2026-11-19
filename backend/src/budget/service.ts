@@ -828,6 +828,80 @@ export class BudgetService {
     })
   }
 
+  /**
+   * Geld umschichten: aus einem Topf (oder aus „Noch ohne Aufgabe“, `fromPotId` null) in einen
+   * anderen Topf, beides in einer Transaktion. Scheitert etwas, ändert sich nichts.
+   * Aus „Noch ohne Aufgabe“ gelten die Regeln der Erhöhung: „Noch ohne Aufgabe“ darf nicht
+   * negativ werden. Zwischen Töpfen bleibt „Noch ohne Aufgabe“ unverändert, das geht immer.
+   */
+  async moveMoney(
+    personId: string,
+    householdId: string,
+    month: Month,
+    move: { fromPotId?: string | null; toPotId: string; amountCents: number },
+    asOf: IsoDate = todayUtc(),
+  ): Promise<BudgetMonthView> {
+    const { toPotId, amountCents } = move
+    const fromPotId = move.fromPotId ?? null
+    if (fromPotId === toPotId) {
+      throw new ApiError(422, 'gleicher_topf', 'Quelle und Ziel sind derselbe Topf.')
+    }
+    return this.db.begin(async (tx) => {
+      await this.householdAccess(tx, personId, householdId, true)
+      const target = await this.accessiblePot(tx, personId, toPotId)
+      if (target.householdId !== householdId) throw potNotFound()
+      if (fromPotId !== null) {
+        const source = await this.accessiblePot(tx, personId, fromPotId)
+        if (source.householdId !== householdId) throw potNotFound()
+      }
+      if ((await this.closedMonths(tx, householdId)).has(month)) {
+        throw new ApiError(409, 'monat_abgeschlossen', `Der Monat ${month} ist abgeschlossen.`)
+      }
+      await this.requireStarted(tx, householdId, month)
+      if (target.archived) {
+        throw new ApiError(
+          422,
+          'topf_archiviert',
+          'Einem archivierten Topf wird nichts zugewiesen.',
+        )
+      }
+      const data = await this.loadData(tx, householdId)
+      const current = (potId: string) =>
+        data.assignments.find((a) => a.potId === potId && a.month === month)?.amountCents ?? 0
+      const targetCents = current(toPotId) + amountCents
+      const changes = [{ potId: toPotId, amountCents: targetCents }]
+      if (fromPotId !== null) {
+        changes.push({ potId: fromPotId, amountCents: current(fromPotId) - amountCents })
+      } else {
+        const next: BudgetData = {
+          ...data,
+          assignments: [
+            ...data.assignments.filter((a) => !(a.potId === toPotId && a.month === month)),
+            { potId: toPotId, month, amountCents: targetCents, source: 'manuell' },
+          ],
+        }
+        const ready = readyToAssignFor(next, month, monthOf(asOf))
+        if (ready < 0) {
+          throw new ApiError(
+            422,
+            'noch_ohne_aufgabe_negativ',
+            `Dafür ist nicht genug Geld ohne Aufgabe da (es fehlen ${-ready} Cent).`,
+          )
+        }
+      }
+      for (const change of changes) {
+        await tx`
+          insert into pot_assignments (pot_id, month, amount_cents, source, updated_by)
+          values (${change.potId}, ${firstDay(month)}, ${change.amountCents}, 'manuell', ${personId})
+          on conflict (pot_id, month) do update set
+            amount_cents = excluded.amount_cents, source = 'manuell',
+            updated_by = excluded.updated_by, updated_at = now()
+        `
+      }
+      return this.view(tx, householdId, month)
+    })
+  }
+
   // --- Erst-ich-Automatik ------------------------------------------------------
 
   /** Automatik von Hand anstoßen (z. B. nach dem Senken anderer Zuweisungen). */

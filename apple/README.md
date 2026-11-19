@@ -85,9 +85,9 @@ die CI.
 - Seitenleiste: Übersicht und Töpfe wie am iPhone, dazu **Planung** und **Auswertungen**. Haushalt
   (Ich / Gemeinsam) und Monat wählt man oben in der Werkzeugleiste; beides gilt für alle Bereiche.
 - Planung: Zuweisung direkt in der Tabelle ändern (Eingabetaste), über das Menü einer Zeile oder
-  „Umschichten“ Geld zwischen „Noch ohne Aufgabe“ und Töpfen verschieben. Reicht das Geld nicht,
-  steht die Meldung des Servers im Blatt. Vergangene Monate lassen sich abschließen, der zuletzt
-  abgeschlossene wieder öffnen.
+  „Umschichten“ Geld zwischen „Noch ohne Aufgabe“ und Töpfen verschieben (ein Aufruf, der Server
+  bucht beides zusammen oder nichts). Reicht das Geld nicht, steht die Meldung des Servers im
+  Blatt. Vergangene Monate lassen sich abschließen, der zuletzt abgeschlossene wieder öffnen.
 - Auswertungen: Kennzahlen, Geldfluss (Sankey, mit der Maus über ein Band fahren; mit
   gemeinsamem Haushalt umschaltbar auf „Über meine Haushalte“), Verlauf von
   Sparquote, Fixkostenanteil und Alter des Geldes, Auffälligkeiten, Ziele, Besitzkosten. Der
