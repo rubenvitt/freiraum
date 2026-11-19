@@ -71,7 +71,8 @@ struct RootView: View {
 }
 
 #if os(iOS)
-/// Hauptansicht am iPhone: Übersicht und Töpfe, „Barausgabe erfassen“ immer erreichbar.
+/// Hauptansicht am iPhone: Übersicht, Töpfe, Auswertung und Ziele, „Barausgabe erfassen“ immer
+/// erreichbar.
 /// Am Mac: `MacMainView`.
 struct MainView: View {
     @Environment(AppModel.self) private var model
@@ -84,6 +85,12 @@ struct MainView: View {
             }
             Tab("Töpfe", systemImage: "square.grid.2x2") {
                 PotsView()
+            }
+            Tab("Auswertung", systemImage: "chart.bar.xaxis") {
+                PhoneAnalyticsView()
+            }
+            Tab("Ziele", systemImage: "flag") {
+                GoalsView()
             }
         }
         .tabViewBottomAccessory {

@@ -1,4 +1,4 @@
-// Aufbereitung der Auswertungen für die Anzeige (Mac). Ohne SwiftUI, damit testbar.
+// Aufbereitung der Auswertungen für die Anzeige (iPhone und Mac). Ohne SwiftUI, damit testbar.
 
 /// Anteile aus den Auswertungen (Basispunkte, 10 000 = 100 %) als Text: gerundet auf ganze
 /// Prozent, unter 10 % mit einer Nachkommastelle. Eingaben in Prozent: `Percent`.
@@ -224,6 +224,8 @@ public struct AnalyticsState: Hashable, Sendable {
     public let assetSummary: String?
     /// Satz unter dem Geldfluss, z. B. „7.350 € kamen herein, 6.900 € flossen hinaus.“
     public let flowSummary: String
+    /// Geldfluss als Liste „woher/wohin“ (iPhone)
+    public let flowList: FlowList
     /// Hinweis, wenn Ein- oder Ausgänge noch nicht zugeordnet sind
     public let uncategorizedNote: String?
 
@@ -322,6 +324,7 @@ public struct AnalyticsState: Hashable, Sendable {
             assetSummary = nil
         }
 
+        flowList = FlowList(flow: flow)
         flowSummary = flow.links.isEmpty
             ? "Im Zeitraum ist noch nichts geflossen."
             : "\(Money.format(flow.inCents)) kamen herein, \(Money.format(flow.outCents)) flossen hinaus."
