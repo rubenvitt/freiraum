@@ -32,6 +32,18 @@
 	<false/>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.finance</string>
+	<key>SUAutomaticallyUpdate</key>
+	<true/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUEnableInstallerLauncherService</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>$(FREIRAUM_UPDATE_FEED)</string>
+	<key>SUPublicEDKey</key>
+	<string>$(FREIRAUM_SPARKLE_PUBLIC_KEY)</string>
+	<key>SUScheduledCheckInterval</key>
+	<integer>3600</integer>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>
