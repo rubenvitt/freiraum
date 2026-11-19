@@ -34,7 +34,7 @@ for n in $VARS; do ALL+=("$n=wert-$n"); done
 run_check
 check "keine Secrets: Exit-Code" 0 $?
 check "keine Secrets: enabled=false" "enabled=false" "$(cat "$TMP/out")"
-grep -q '^::warning::' "$TMP/stdout" "$TMP/stderr"
+grep -q '^::warning::' "$TMP/stdout"
 check "keine Secrets: ::warning:: ausgegeben" 0 $?
 
 # Fall 2: alles gesetzt -> enabled=true, Exit 0, keine Secret-Werte in der Ausgabe
@@ -52,15 +52,13 @@ done
 for n in $VARS; do PART+=("$n=wert-$n"); done
 run_check "${PART[@]}"
 check "teilweise: Exit-Code" 1 $?
-OUT="$(cat "$TMP/stdout" "$TMP/stderr")"
+OUT="$(cat "$TMP/stdout")"
 case "$OUT" in
   *"::error::Es fehlen: ASC_KEY_ID, SPARKLE_PRIVATE_KEY"*) check "teilweise: Fehlertext" ok ok ;;
   *) check "teilweise: Fehlertext" "::error::Es fehlen: ASC_KEY_ID, SPARKLE_PRIVATE_KEY" "$OUT" ;;
 esac
-case "$OUT" in
-  *geheim-*) check "teilweise: keine Secret-Werte" ok "Wert ausgegeben" ;;
-  *) check "teilweise: keine Secret-Werte" ok ok ;;
-esac
+grep -q 'geheim-' "$TMP/out" "$TMP/stdout" "$TMP/stderr"
+check "teilweise: keine Secret-Werte" 1 $?
 check "teilweise: kein enabled=true" "" "$(grep 'enabled=true' "$TMP/out")"
 
 # Fall 4: Secrets gesetzt, Variable fehlt -> Fehler
@@ -69,7 +67,7 @@ for n in $SECRETS; do NOVAR+=("$n=geheim-$n"); done
 for n in $VARS; do [ "$n" = "FREIRAUM_DOMAIN" ] || NOVAR+=("$n=wert-$n"); done
 run_check "${NOVAR[@]}"
 check "Variable fehlt: Exit-Code" 1 $?
-OUT="$(cat "$TMP/stdout" "$TMP/stderr")"
+OUT="$(cat "$TMP/stdout")"
 case "$OUT" in
   *"::error::Es fehlen: FREIRAUM_DOMAIN"*) check "Variable fehlt: Fehlertext" ok ok ;;
   *) check "Variable fehlt: Fehlertext" "::error::Es fehlen: FREIRAUM_DOMAIN" "$OUT" ;;
@@ -90,14 +88,18 @@ printf 'settings:\n    MARKETING_VERSION: 1.3\n' > "$TMP/c.yml"
 check "version unquoted" "1.3.9" "$("$SCRIPT" version "$TMP/c.yml" 9)"
 printf 'settings:\n    OTHER: 1\n' > "$TMP/d.yml"
 "$SCRIPT" version "$TMP/d.yml" 1 > /dev/null 2> "$TMP/e"
-check "version fehlt: Exit nicht 0" 1 $([ $? -ne 0 ] && echo 1 || echo 0)
+rc=$?
+check "version fehlt: Exit-Code" 1 "$rc"
 [ -s "$TMP/e" ]
-check "version fehlt: Fehlermeldung" 0 $?
+rc=$?
+check "version fehlt: Fehlermeldung" 0 "$rc"
 printf 'settings:\n    MARKETING_VERSION: "abc"\n' > "$TMP/f.yml"
 "$SCRIPT" version "$TMP/f.yml" 1 > /dev/null 2>&1
-check "version ungültig: Exit nicht 0" 1 $([ $? -ne 0 ] && echo 1 || echo 0)
+rc=$?
+check "version ungültig: Exit-Code" 1 "$rc"
 "$SCRIPT" version "$TMP/nicht-da.yml" 1 > /dev/null 2>&1
-check "version Datei fehlt: Exit nicht 0" 1 $([ $? -ne 0 ] && echo 1 || echo 0)
+rc=$?
+check "version Datei fehlt: Exit-Code" 1 "$rc"
 
 if [ "$FAILS" -ne 0 ]; then
   echo "test-release-env: $FAILS von $CHECKS Prüfungen fehlgeschlagen"
