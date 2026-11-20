@@ -40,6 +40,7 @@ jobs:
         run: apt-get update && apt-get install -y --no-install-recommends libxml2-utils
       - run: bash apple/scripts/test-appcast.sh
       - run: bash apple/scripts/test-release-env.sh
+      - run: bash apple/scripts/test-check-rpaths.sh
 
   release:
     name: Signieren, notarisieren, veröffentlichen (macOS)
@@ -226,6 +227,8 @@ jobs:
           xcodebuild -exportArchive -archivePath "$ARCHIVE" -exportPath "$EXPORT" \
             -exportOptionsPlist "$optionen"
           codesign --verify --deep --strict --verbose=2 "$EXPORT/Freiraum.app"
+          # Jede @rpath-Bibliothek muss im Bundle auffindbar sein (sonst startet die App nicht).
+          bash scripts/check-rpaths.sh "$EXPORT/Freiraum.app"
 
       - name: DMG bauen und signieren
         if: steps.check.outputs.enabled == 'true'

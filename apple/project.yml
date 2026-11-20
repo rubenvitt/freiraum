@@ -48,6 +48,9 @@ targets:
         # Signaturidentität am Mac nur für die App (nicht für Swift-Pakete und Build-Plugins).
         # Lokal „Apple Development“, im Release-Workflow „Developer ID Application“.
         "CODE_SIGN_IDENTITY[sdk=macosx*]": $(FREIRAUM_MAC_SIGN_IDENTITY)
+        # XcodeGen übernimmt für das gemeinsame Target die iOS-Voreinstellung
+        # „@executable_path/Frameworks“; am Mac liegen Frameworks in Contents/Frameworks.
+        "LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]": "$(inherited) @executable_path/../Frameworks"
         TARGETED_DEVICE_FAMILY: "1"
         ENABLE_HARDENED_RUNTIME: YES
     info:
