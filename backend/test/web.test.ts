@@ -28,7 +28,7 @@ describe('Registrierungsseite', () => {
     const res = await get('/registrieren')
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8')
-    expect(res.headers.get('cache-control')).toBe('no-store')
+    expect(res.headers.get('cache-control')).toBe('no-store, no-transform')
     expectStrictHeaders(res)
     const html = await res.text()
     expect(html).toContain('Passkey anlegen')
@@ -101,6 +101,23 @@ describe('Registrierungsseite', () => {
   })
 })
 
+// Vor dem Server sitzt Cloudflare. Rocket Loader schreibt <script>-Tags um und lädt sie über ein
+// eigenes Skript nach, das die CSP blockiert: Dann läuft kein JavaScript der Seiten.
+describe('Cloudflare', () => {
+  it('Registrierung: jedes Skript ist von Rocket Loader ausgenommen', async () => {
+    const html = await (await get('/registrieren')).text()
+    const tags = [...html.matchAll(/<script\b[^>]*>/gi)].map((m) => m[0])
+    expect(tags.length).toBeGreaterThan(0)
+    for (const tag of tags) expect(tag).toContain('data-cfasync="false"')
+  })
+
+  it('Registrierung: Skript und Stil verbieten Umschreiben', async () => {
+    for (const path of ['/registrieren.js', '/registrieren.css']) {
+      expect((await get(path)).headers.get('cache-control')).toContain('no-transform')
+    }
+  })
+})
+
 describe('Web-Oberfläche', () => {
   const dir = mkdtempSync(join(tmpdir(), 'freiraum-web-'))
   mkdirSync(join(dir, 'assets'))
@@ -117,16 +134,25 @@ describe('Web-Oberfläche', () => {
     const res = await getWeb('/')
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8')
-    expect(res.headers.get('cache-control')).toBe('no-store')
+    expect(res.headers.get('cache-control')).toBe('no-store, no-transform')
     expectStrictHeaders(res)
     expect(await res.text()).toContain('<title>Freiraum</title>')
+  })
+
+  it('/ nimmt jedes Skript des Builds von Rocket Loader aus', async () => {
+    const html = await (await getWeb('/')).text()
+    expect(html).toContain(
+      '<script data-cfasync="false" type="module" src="/assets/app-abc123.js">',
+    )
   })
 
   it('/assets liefert gelistete Dateien unveränderlich', async () => {
     const js = await getWeb('/assets/app-abc123.js')
     expect(js.status).toBe(200)
     expect(js.headers.get('content-type')).toBe('text/javascript; charset=utf-8')
-    expect(js.headers.get('cache-control')).toBe('public, max-age=31536000, immutable')
+    expect(js.headers.get('cache-control')).toBe(
+      'public, max-age=31536000, immutable, no-transform',
+    )
     expectStrictHeaders(js)
     const css = await getWeb('/assets/app-abc123.css')
     expect(css.headers.get('content-type')).toBe('text/css; charset=utf-8')
