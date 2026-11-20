@@ -52,8 +52,16 @@ const invalidChallenge = () =>
     'challenge_ungueltig',
     'Die Anmeldeanfrage ist abgelaufen oder unbekannt. Bitte neu starten.',
   )
-const passkeyRejected = () =>
-  new ApiError(401, 'passkey_abgelehnt', 'Der Passkey konnte nicht bestätigt werden.')
+/**
+ * Abgelehnter Passkey. Der Client erfährt nur „abgelehnt“; der Grund (z. B. falsche Origin,
+ * fehlende Nutzerverifikation) landet im Server-Log, ohne Schlüssel, Tokens oder Signaturen.
+ */
+const passkeyRejected = (step: 'Registrierung' | 'Anmeldung', reason: string) => {
+  console.error(`Passkey abgelehnt (${step}): ${reason}`)
+  return new ApiError(401, 'passkey_abgelehnt', 'Der Passkey konnte nicht bestätigt werden.')
+}
+
+const reasonOf = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
 export class AuthService {
   constructor(
@@ -151,8 +159,10 @@ export class AuthService {
         expectedOrigin: this.config.webauthn.origins,
         expectedRPID: this.config.webauthn.rpId,
         requireUserVerification: true,
-      }).catch(() => ({ verified: false as const }))
-      if (!verification.verified) throw passkeyRejected()
+      }).catch((err: unknown) => {
+        throw passkeyRejected('Registrierung', reasonOf(err))
+      })
+      if (!verification.verified) throw passkeyRejected('Registrierung', 'nicht verifiziert')
 
       const info = verification.registrationInfo
       const inserted = await tx`
@@ -211,11 +221,15 @@ export class AuthService {
         where k.id = ${input.credential.id}
         for update of k
       `
-      if (!passkey) throw passkeyRejected()
+      if (!passkey) {
+        throw passkeyRejected('Anmeldung', `Credential-ID ${input.credential.id} unbekannt`)
+      }
 
       // Gehört der Passkey wirklich zu der Person, die das Gerät nennt?
       const userHandle = input.credential.response.userHandle
-      if (userHandle && userHandle !== passkey.webauthn_user_id) throw passkeyRejected()
+      if (userHandle && userHandle !== passkey.webauthn_user_id) {
+        throw passkeyRejected('Anmeldung', 'User-Handle passt nicht zur Person des Passkeys')
+      }
 
       const verification = await verifyAuthenticationResponse({
         response: input.credential,
@@ -229,8 +243,12 @@ export class AuthService {
           transports: passkey.transports,
         },
         requireUserVerification: true,
-      }).catch(() => ({ verified: false as const, authenticationInfo: undefined }))
-      if (!verification.verified || !verification.authenticationInfo) throw passkeyRejected()
+      }).catch((err: unknown) => {
+        throw passkeyRejected('Anmeldung', reasonOf(err))
+      })
+      if (!verification.verified || !verification.authenticationInfo) {
+        throw passkeyRejected('Anmeldung', 'nicht verifiziert')
+      }
 
       await tx`
         update passkeys
