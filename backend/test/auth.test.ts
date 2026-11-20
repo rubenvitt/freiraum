@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { hashToken } from '../src/auth/tokens.js'
 import { ORIGIN, setupTestApp } from './helpers/app.js'
 import { SoftAuthenticator } from './helpers/authenticator.js'
@@ -7,6 +7,16 @@ const { db, auth, request, reset } = setupTestApp()
 
 afterAll(() => db.end())
 beforeEach(() => reset())
+afterEach(() => vi.restoreAllMocks())
+
+/** Fängt console.error ab und liefert die protokollierten Zeilen. */
+function captureErrors() {
+  const lines: string[] = []
+  vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+    lines.push(args.map(String).join(' '))
+  })
+  return lines
+}
 
 type Json = Record<string, any>
 const body = async (res: Response): Promise<Json> => (await res.json()) as Json
@@ -115,6 +125,23 @@ describe('Registrierung per Einladung', () => {
     expect((await body(res)).error.code).toBe('passkey_abgelehnt')
   })
 
+  it('protokolliert den Grund einer abgelehnten Registrierung', async () => {
+    const lines = captureErrors()
+    const person = await auth.createPerson('Person A')
+    const { token } = await auth.createInvitation(person.id)
+    const start = await body(
+      await request('POST', '/v1/auth/registration/options', { invitationToken: token }),
+    )
+    await request('POST', '/v1/auth/registration/verify', {
+      challengeId: start.challengeId,
+      invitationToken: token,
+      credential: new SoftAuthenticator('https://boese.example').create(start.options as any),
+    })
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toMatch(/^Passkey abgelehnt \(Registrierung\): .*boese\.example/)
+    expect(lines[0]).not.toContain(token)
+  })
+
   it('verlangt Nutzerverifikation (Face ID, Touch ID, Code)', async () => {
     const person = await auth.createPerson('Person A')
     const { token } = await auth.createInvitation(person.id)
@@ -212,15 +239,43 @@ describe('Anmeldung mit Passkey', () => {
   })
 
   it('lehnt unbekannte Passkeys ab', async () => {
+    const lines = captureErrors()
     const res = await login(new SoftAuthenticator(ORIGIN))
     expect(res.status).toBe(401)
+    expect(lines).toEqual([expect.stringMatching(/^Passkey abgelehnt \(Anmeldung\): .*unbekannt/)])
   })
 
   it('lehnt einen Passkey ab, der sich als andere Person ausgibt', async () => {
     const a = await enroll('Person A')
     const b = await enroll('Person B')
     a.authenticator.userHandle = b.authenticator.userHandle
+    const lines = captureErrors()
     expect((await login(a.authenticator)).status).toBe(401)
+    expect(lines).toEqual([
+      expect.stringMatching(/^Passkey abgelehnt \(Anmeldung\): .*User-Handle/),
+    ])
+  })
+
+  it('protokolliert den Grund einer abgelehnten Signaturprüfung', async () => {
+    const { authenticator } = await enroll('Person A')
+    const lines = captureErrors()
+    const start = await body(await request('POST', '/v1/auth/login/options'))
+    const credential = authenticator.get(start.options as any)
+    const clientData = JSON.parse(
+      Buffer.from(credential.response.clientDataJSON, 'base64url').toString(),
+    )
+    clientData.origin = 'https://boese.example'
+    credential.response.clientDataJSON = Buffer.from(JSON.stringify(clientData)).toString(
+      'base64url',
+    )
+    const res = await request('POST', '/v1/auth/login/verify', {
+      challengeId: start.challengeId,
+      credential,
+    })
+    expect(res.status).toBe(401)
+    expect(lines).toEqual([
+      expect.stringMatching(/^Passkey abgelehnt \(Anmeldung\): .*boese\.example/),
+    ])
   })
 
   it('akzeptiert keine Registrierungs-Challenge für die Anmeldung', async () => {
